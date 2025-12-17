@@ -6,35 +6,9 @@ WORKDIR /build
 # Create Maven project structure
 RUN mkdir -p src/main/java/com/example/debezium/smt
 
-# Copy Java source
-COPY LegacyCharsetTransform.java src/main/java/com/example/debezium/smt/
-
-# Create pom.xml
-RUN cat > pom.xml <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
-    <modelVersion>4.0.0</modelVersion>
-    <groupId>com.example.debezium</groupId>
-    <artifactId>legacy-charset-smt</artifactId>
-    <version>1.0.0</version>
-    <packaging>jar</packaging>
-    <properties>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-    <dependencies>
-        <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>connect-api</artifactId>
-            <version>3.6.0</version>
-            <scope>provided</scope>
-        </dependency>
-    </dependencies>
-</project>
-EOF
+# Copy pom.xml and Java source
+COPY smt/LegacyCharsetTransform/pom.xml .
+COPY smt/LegacyCharsetTransform/LegacyCharsetTransform.java src/main/java/com/example/debezium/smt/
 
 # Build JAR
 RUN mvn clean package -DskipTests -q
