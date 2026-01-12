@@ -10,7 +10,8 @@ Kafka-DBSync provides infrastructure and automation for building multi-database 
 
 - **Multi-Database CDC**: Oracle, MariaDB, MSSQL support
 - **Real-time Streaming**: Kafka 4.0 with KRaft mode (no ZooKeeper)
-- **Debezium Integration**: Log-based CDC connectors
+- **Debezium Integration**: Log-based CDC connectors (2.x and 3.x versions)
+- **Dual Debezium Support**: Run Debezium 2.x and 3.x side-by-side for migration testing
 - **JDBC Sink Connectors**: Write to any JDBC-compatible database
 - **Web UIs**: Redpanda Console and Kafka Connect UI for monitoring
 - **E2E Testing**: Automated setup and verification scripts
@@ -20,18 +21,28 @@ Kafka-DBSync provides infrastructure and automation for building multi-database 
 ### Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Source    │────▶│    Kafka     │────▶│   Target    │
-│  Database   │     │   Cluster    │     │  Database   │
-│ (Oracle/    │     │              │     │ (MariaDB/   │
-│  MSSQL)     │     │ Debezium CDC │     │  MSSQL)     │
-└─────────────┘     └──────────────┘     └─────────────┘
+                         ┌──────────────────────────────────┐
+                         │         Kafka Cluster            │
+┌─────────────┐          │  ┌────────────────────────────┐  │          ┌─────────────┐
+│   Source    │          │  │    Kafka Connect 2.x       │  │          │   Target    │
+│  Database   │──────────│──│    (Debezium 2.6.x)        │──│──────────│  Database   │
+│ (Oracle/    │          │  └────────────────────────────┘  │          │ (MariaDB/   │
+│  MSSQL)     │          │  ┌────────────────────────────┐  │          │  MSSQL)     │
+│             │──────────│──│    Kafka Connect 3.x       │──│──────────│             │
+│             │          │  │    (Debezium 3.4.x)        │  │          │             │
+└─────────────┘          │  └────────────────────────────┘  │          └─────────────┘
+                         └──────────────────────────────────┘
 ```
 
 **Data Flow:**
 1. Debezium source connector captures changes from source database transaction logs
 2. Changes are published to Kafka topics
 3. JDBC sink connector consumes from Kafka and writes to target database
+
+**Dual Debezium Mode:** Both Debezium 2.x and 3.x can run simultaneously, allowing:
+- Side-by-side comparison of CDC behavior
+- Safe migration testing between versions
+- Independent connector management per version
 
 ## Quick Start
 
@@ -52,10 +63,16 @@ Installs kubectl, helm, and kind if not already present.
 ### 2. Create Cluster and Deploy Services
 
 ```bash
-# Lightweight mode (Oracle XE 21c, faster startup)
+# Standard mode with Debezium 2.x (default)
 make all
 
-# Or Enterprise mode (Oracle EE 19c, full features)
+# Dual mode with BOTH Debezium 2.x and 3.x
+make all-dual
+
+# Debezium 3.4 only
+make all-debezium-3.4
+
+# Enterprise Oracle mode (Oracle EE 19c, full features)
 make all LIGHTWEIGHT=0
 ```
 
@@ -64,20 +81,31 @@ This will:
 - Deploy Kafka, Kafka Connect, Oracle, MariaDB, and supporting services
 - Wait for all pods to be ready (~3-5 minutes)
 
+**Dual Mode Services:**
+- Debezium 2.x: `dbrep-kafka-connect-cp-kafka-connect:8083`
+- Debezium 3.x: `dbrep-kafka-connect-v3-cp-kafka-connect:8083`
+
 ### 3. Run E2E Test
 
 ```bash
 # Start port forwarding (in separate terminal)
 make port-forward
 
-# Run E2E test
+# Run E2E test (Debezium 2.x)
 make e2e
+
+# Or test BOTH Debezium 2.x and 3.x (requires dual deployment)
+make e2e-dual
 ```
 
 The E2E test will:
 - Setup Oracle and MariaDB databases
 - Register Debezium source and JDBC sink connectors
 - Verify data replication
+
+**Dual E2E Test Results:**
+- Debezium 2.x replicates to `target_orders` table
+- Debezium 3.x replicates to `target_orders_3x` table
 
 ### 4. Test CDC Operations
 
@@ -137,21 +165,41 @@ This allows environment-specific customization without modifying base charts.
 make tools              # Install kubectl, helm, kind
 make cluster            # Create kind cluster
 make cluster-delete     # Delete kind cluster
-make deploy             # Deploy all services
+make deploy             # Deploy all services (Debezium 2.x)
+make deploy-dual        # Deploy with BOTH Debezium 2.x and 3.x
+make deploy-debezium-3.4  # Deploy with Debezium 3.4 only
 make deploy-delete      # Remove all services
 make wait-ready         # Wait for pods to be ready
 make all                # Full setup: cluster + deploy + wait + e2e
+make all-dual           # Full setup with BOTH Debezium 2.x and 3.x
+make all-debezium-3.4   # Full setup with Debezium 3.4 only
+```
+
+### Build Images
+
+```bash
+make build-debezium-2.x-image  # Build Kafka Connect with Debezium 2.x
+make build-debezium-3.4-image  # Build Kafka Connect with Debezium 3.4
+make build-all-images          # Build both images
 ```
 
 ### E2E Testing
 
 ```bash
-make e2e                # Run full E2E test
+make e2e                # Run full E2E test (Debezium 2.x)
+make e2e-2x             # Run E2E test using Debezium 2.x
+make e2e-3x             # Run E2E test using Debezium 3.x
+make e2e-dual           # Run E2E test on BOTH versions
 make setup              # Setup databases only
-make register           # Register connectors only
+make register           # Register connectors (2.x)
+make register-2x        # Register connectors on Debezium 2.x
+make register-3x        # Register connectors on Debezium 3.x
 make verify             # Verify data replication
+make verify-2x          # Verify data from Debezium 2.x
+make verify-3x          # Verify data from Debezium 3.x
 make test               # Test CDC operations (INSERT/UPDATE/DELETE)
-make clean              # Delete connectors
+make clean              # Delete connectors (2.x)
+make clean-dual         # Delete connectors (both versions)
 make reset              # Full reset (connectors + tables)
 ```
 
@@ -210,6 +258,49 @@ make all LIGHTWEIGHT=0
 - Slower startup (~10 minutes)
 - Full Oracle features
 - Production-like testing
+
+## Dual Debezium Deployment
+
+Run both Debezium 2.x and 3.x simultaneously for migration testing and version comparison.
+
+### Setup
+
+```bash
+# Deploy with both Debezium versions
+make all-dual
+```
+
+This deploys two Kafka Connect instances:
+- **Debezium 2.x**: `dbrep-kafka-connect-cp-kafka-connect:8083` (Java 11, Debezium 2.6.x)
+- **Debezium 3.x**: `dbrep-kafka-connect-v3-cp-kafka-connect:8083` (Java 17, Debezium 3.4.x)
+
+### Testing Both Versions
+
+```bash
+# Run E2E test on both versions
+make e2e-dual
+```
+
+This registers connectors on both instances:
+| Version | Source Connector | Sink Connector | Target Table |
+|---------|-----------------|----------------|--------------|
+| 2.x | `source_cdc_oracle_demo` | `sink_cdc_oracle_to_mariadb` | `target_orders` |
+| 3.x | `source_cdc_oracle_demo_3x` | `sink_cdc_oracle_to_mariadb_3x` | `target_orders_3x` |
+
+### Verify Results
+
+```bash
+# Check data from both versions
+make verify-2x
+make verify-3x
+```
+
+### Use Cases
+
+- **Version Migration**: Test Debezium 3.x before upgrading from 2.x
+- **Behavior Comparison**: Compare CDC behavior between versions
+- **Parallel Processing**: Run different workloads on different versions
+- **Rollback Safety**: Keep 2.x running while testing 3.x
 
 ## Supported CDC Scenarios
 

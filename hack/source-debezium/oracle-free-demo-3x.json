@@ -1,0 +1,25 @@
+{
+    "name": "source_cdc_oracle_demo_3x",
+    "config": {
+        "connector.class": "io.debezium.connector.oracle.OracleConnector",
+        "tasks.max": "1",
+        "database.hostname": "dbrep-oracle-oracle-db.dev.svc.cluster.local",
+        "database.port": "1521",
+        "database.user": "c##dbzcdc",
+        "database.password": "dbz",
+        "database.dbname": "XE",
+        "database.pdb.name": "XEPDB1",
+        "schema.history.internal.kafka.bootstrap.servers": "dbrep-kafka.dev.svc.cluster.local:9092",
+        "schema.history.internal.kafka.topic": "schema-changes.oracle.3x",
+        "table.include.list": "DEMO.SOURCE_ORDERS",
+        "topic.prefix": "cdc_oracle_3x",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "true",
+        "value.converter.schemas.enable": "true",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.drop.tombstones": "false",
+        "log.mining.strategy": "online_catalog"
+    }
+}

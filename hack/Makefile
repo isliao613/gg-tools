@@ -2,8 +2,11 @@
 # Usage: make e2e
 
 .PHONY: help e2e setup setup-oracle setup-mariadb port-forward register-source register-sink \
-        verify test-insert test-update test-delete clean status logs reset topics topic-purge \
-        cluster cluster-delete deploy deploy-delete tools check-tools
+	verify test-insert test-update test-delete clean status logs reset topics topic-purge \
+	cluster cluster-delete deploy deploy-delete tools check-tools \
+	build-debezium-2.x-image build-debezium-3.4-image build-all-images \
+	deploy-debezium-3.4 deploy-dual all-debezium-3.4 all-dual \
+	e2e-2x e2e-3x e2e-dual register-2x register-3x verify-2x verify-3x clean-dual
 
 # Configuration
 KAFKA_CONNECT_URL ?= http://localhost:8083
@@ -16,20 +19,38 @@ CLUSTER_NAME ?= kafka-dbsync
 HACK_DIR := $(shell dirname $(realpath $(firstword $(MAKEFILE_LIST))))
 ROOT_DIR := $(HACK_DIR)/..
 
+# Kafka Connect image configuration (Debezium 2.x - default)
+KAFKA_CONNECT_IMAGE ?= omygod613/cp-kafka-connect
+KAFKA_CONNECT_IMAGE_TAG ?= 7.6.1-20251217
+
+# Kafka Connect image configuration (Debezium 2.x - local build)
+KAFKA_CONNECT_2X_IMAGE ?= kafka-dbsync/cp-kafka-connect-debezium
+KAFKA_CONNECT_2X_IMAGE_TAG ?= 2.x
+
+# Kafka Connect image configuration (Debezium 3.x)
+KAFKA_CONNECT_3X_IMAGE ?= kafka-dbsync/cp-kafka-connect-debezium
+KAFKA_CONNECT_3X_IMAGE_TAG ?= 3.4.0
+
+# Kafka Connect service names
+KAFKA_CONNECT_2X_SVC ?= dbrep-kafka-connect-cp-kafka-connect
+KAFKA_CONNECT_3X_SVC ?= dbrep-kafka-connect-v3-cp-kafka-connect
+
 # Oracle configuration - set LIGHTWEIGHT=1 for Oracle XE 21c (gvenzl image)
 LIGHTWEIGHT ?= 1
 ifeq ($(LIGHTWEIGHT),1)
-  ORACLE_POD ?= dbrep-oracle-oracle-db
-  ORACLE_SID ?= XE
-  ORACLE_PDB ?= XEPDB1
-  ORACLE_SQL_SETUP := $(HACK_DIR)/sql/oracle-xe-setup.sql
-  ORACLE_CONNECTOR := $(HACK_DIR)/source-debezium/oracle-free-demo.json
+	ORACLE_POD ?= dbrep-oracle-oracle-db
+	ORACLE_SID ?= XE
+	ORACLE_PDB ?= XEPDB1
+	ORACLE_SQL_SETUP := $(HACK_DIR)/sql/oracle-xe-setup.sql
+	ORACLE_CONNECTOR := $(HACK_DIR)/source-debezium/oracle-free-demo.json
+	ORACLE_CONNECTOR_3X := $(HACK_DIR)/source-debezium/oracle-free-demo-3x.json
 else
-  ORACLE_POD ?= dbrep-oracle-oracle-db-0
-  ORACLE_SID ?= ORCLCDB
-  ORACLE_PDB ?= ORCLPDB1
-  ORACLE_SQL_SETUP := $(HACK_DIR)/sql/oracle-pdb-setup.sql
-  ORACLE_CONNECTOR := $(HACK_DIR)/source-debezium/oracle-demo.json
+	ORACLE_POD ?= dbrep-oracle-oracle-db-0
+	ORACLE_SID ?= ORCLCDB
+	ORACLE_PDB ?= ORCLPDB1
+	ORACLE_SQL_SETUP := $(HACK_DIR)/sql/oracle-pdb-setup.sql
+	ORACLE_CONNECTOR := $(HACK_DIR)/source-debezium/oracle-demo.json
+	ORACLE_CONNECTOR_3X := $(HACK_DIR)/source-debezium/oracle-demo-3x.json
 endif
 
 help:
@@ -37,6 +58,8 @@ help:
 	@echo ""
 	@echo "Quick Start (from scratch):"
 	@echo "  make all              Full setup: cluster + deploy + wait + e2e"
+	@echo "  make all-debezium-3.4 Full setup with Debezium 3.4 image only"
+	@echo "  make all-dual         Full setup with BOTH Debezium 2.x and 3.x"
 	@echo ""
 	@echo "Oracle Mode (LIGHTWEIGHT=$(LIGHTWEIGHT)):"
 	@echo "  LIGHTWEIGHT=1  Oracle XE 21c (~2-3min startup) [DEFAULT]"
@@ -48,16 +71,31 @@ help:
 	@echo "  make cluster          Create kind cluster"
 	@echo "  make cluster-delete   Delete kind cluster"
 	@echo "  make deploy           Deploy all services (Kafka, Oracle, MariaDB, etc.)"
+	@echo "  make deploy-debezium-3.4 Deploy all services with Debezium 3.4 image"
+	@echo "  make deploy-dual      Deploy with BOTH Debezium 2.x and 3.x Kafka Connect"
 	@echo "  make deploy-delete    Delete all services"
 	@echo "  make wait-ready       Wait for all pods to be ready"
 	@echo ""
+	@echo "Build Images:"
+	@echo "  make build-debezium-2.x-image  Build Kafka Connect image with Debezium 2.x"
+	@echo "  make build-debezium-3.4-image  Build Kafka Connect image with Debezium 3.4"
+	@echo "  make build-all-images          Build both Debezium 2.x and 3.x images"
+	@echo ""
 	@echo "E2E Test:"
-	@echo "  make e2e              Run full E2E test (setup + register + verify)"
+	@echo "  make e2e              Run full E2E test (setup + register + verify) on 2.x"
+	@echo "  make e2e-2x           Run E2E test using Debezium 2.x only"
+	@echo "  make e2e-3x           Run E2E test using Debezium 3.x only"
+	@echo "  make e2e-dual         Run E2E test on BOTH Debezium 2.x and 3.x"
 	@echo "  make setup            Setup Oracle and MariaDB databases"
-	@echo "  make register         Register source and sink connectors"
-	@echo "  make verify           Verify data in MariaDB"
+	@echo "  make register         Register source and sink connectors (2.x)"
+	@echo "  make register-2x      Register connectors on Debezium 2.x"
+	@echo "  make register-3x      Register connectors on Debezium 3.x"
+	@echo "  make verify           Verify data in MariaDB (target_orders)"
+	@echo "  make verify-2x        Verify data from 2.x (target_orders)"
+	@echo "  make verify-3x        Verify data from 3.x (target_orders_3x)"
 	@echo "  make test             Run CDC tests (insert, update, delete)"
-	@echo "  make clean            Delete connectors"
+	@echo "  make clean            Delete connectors (2.x)"
+	@echo "  make clean-dual       Delete connectors (both 2.x and 3.x)"
 	@echo "  make reset            Full reset (connectors + tables)"
 	@echo ""
 	@echo "Utilities:"
@@ -67,10 +105,29 @@ help:
 	@echo "  make topics           List Kafka CDC topics"
 	@echo "  make topic-purge      Purge records from topic (TOPIC=name)"
 	@echo "  make pods             Show pod status"
+	@echo ""
+	@echo "Dual Kafka Connect Services:"
+	@echo "  Debezium 2.x: dbrep-kafka-connect-cp-kafka-connect:8083"
+	@echo "  Debezium 3.x: dbrep-kafka-connect-v3-cp-kafka-connect:8083"
 
-# Full E2E test
+# Full E2E test (using Debezium 2.x by default)
 e2e: setup register verify
 	@echo "[OK] E2E test completed successfully!"
+
+# E2E test using Debezium 2.x
+e2e-2x: setup register-2x verify-2x
+	@echo "[OK] E2E test with Debezium 2.x completed successfully!"
+
+# E2E test using Debezium 3.x
+e2e-3x: setup register-3x verify-3x
+	@echo "[OK] E2E test with Debezium 3.x completed successfully!"
+
+# E2E test on BOTH Debezium 2.x and 3.x
+e2e-dual: setup register-2x register-3x verify-2x verify-3x
+	@echo "[OK] E2E test with BOTH Debezium 2.x and 3.x completed successfully!"
+	@echo "[INFO] Data replicated to:"
+	@echo "  - target_orders (via Debezium 2.x)"
+	@echo "  - target_orders_3x (via Debezium 3.x)"
 
 # Setup both databases
 setup: setup-oracle setup-mariadb
@@ -88,8 +145,8 @@ test: test-insert test-update test-delete verify
 port-forward:
 	@echo "[INFO] Starting port forwarding..."
 	@kubectl port-forward svc/dbrep-kafka-connect-cp-kafka-connect 8083:8083 & \
-	 kubectl port-forward svc/dbrep-kafka-connect-ui 8000:8000 & \
-	 wait
+	kubectl port-forward svc/dbrep-kafka-connect-ui 8000:8000 & \
+	wait
 
 # Setup Oracle
 setup-oracle:
@@ -163,6 +220,96 @@ register-sink:
 	kubectl exec $$POD -n $(NAMESPACE) -- curl -s \
 		http://dbrep-kafka-connect-cp-kafka-connect:8083/connectors/sink_cdc_oracle_to_mariadb/status || echo "[ERROR] Connector not found"
 
+# =============================================================================
+# Dual E2E Test Targets (2.x and 3.x)
+# =============================================================================
+
+# Register connectors on Debezium 2.x
+register-2x:
+	@echo "[INFO] Registering connectors on Debezium 2.x ($(KAFKA_CONNECT_2X_SVC))..."
+	@echo "[INFO] Registering Debezium Oracle source connector (2.x)..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl cp $(ORACLE_CONNECTOR) $$POD:/tmp/source-connector-2x.json -n $(NAMESPACE) && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-2x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	@echo "[INFO] Registering JDBC sink connector (2.x)..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl cp $(HACK_DIR)/sink-jdbc/cdc_oracle_mariadb-demo.json $$POD:/tmp/sink-connector-2x.json -n $(NAMESPACE) && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-2x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[INFO] Verifying connectors on 2.x..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors || echo "[ERROR] Could not list connectors"
+	@echo ""
+	@echo "[OK] Debezium 2.x connectors registered"
+
+# Register connectors on Debezium 3.x
+register-3x:
+	@echo "[INFO] Registering connectors on Debezium 3.x ($(KAFKA_CONNECT_3X_SVC))..."
+	@echo "[INFO] Registering Debezium Oracle source connector (3.x)..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl cp $(ORACLE_CONNECTOR_3X) $$POD:/tmp/source-connector-3x.json -n $(NAMESPACE) && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-3x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	@echo "[INFO] Registering JDBC sink connector (3.x)..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl cp $(HACK_DIR)/sink-jdbc/cdc_oracle_mariadb-demo-3x.json $$POD:/tmp/sink-connector-3x.json -n $(NAMESPACE) && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-3x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[INFO] Verifying connectors on 3.x..."
+	@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors || echo "[ERROR] Could not list connectors"
+	@echo ""
+	@echo "[OK] Debezium 3.x connectors registered"
+
+# Verify data in MariaDB from Debezium 2.x
+verify-2x:
+	@echo "[INFO] Data in MariaDB target_database.target_orders (via Debezium 2.x):"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.target_orders ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+
+# Verify data in MariaDB from Debezium 3.x
+verify-3x:
+	@echo "[INFO] Data in MariaDB target_database.target_orders_3x (via Debezium 3.x):"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.target_orders_3x ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+
+# Clean up connectors on both 2.x and 3.x
+clean-dual:
+	@echo "[INFO] Deleting connectors on Debezium 2.x..."
+	-@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/source_cdc_oracle_demo
+	-@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/sink_cdc_oracle_to_mariadb
+	@echo "[INFO] Deleting connectors on Debezium 3.x..."
+	-@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/source_cdc_oracle_demo_3x
+	-@POD=$$(kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}') && \
+	kubectl exec $$POD -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/sink_cdc_oracle_to_mariadb_3x
+	@echo "[OK] All connectors deleted"
+
 # Check connector status
 status:
 	@echo "[INFO] Connector Status:"
@@ -196,7 +343,7 @@ test-insert:
 	@echo "[INFO] Testing INSERT..."
 ifeq ($(LIGHTWEIGHT),1)
 	@POD=$$(kubectl get pods -n $(NAMESPACE) -l app=oracle-db -o jsonpath='{.items[0].metadata.name}') && \
-	printf "INSERT INTO DEMO.SOURCE_ORDERS(ID, ORDER_NO, CUSTOMER_NAME, AMOUNT, STATUS) VALUES(5, 'ORD-005', 'Eve', 3100.00, 'PENDING');\nCOMMIT;\nEXIT;\n" | kubectl exec -i $$POD -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	printf "INSERT INTO DEMO.SOURCE_ORDERS(ID, ORDER_NO, CUSTOMER_NAME, AMOUNT, STATUS) VALUES(5, 'ORD-005', 'Eve', 3100.00, 'PENDING');\nCOMMIT;\nEXIT;\n" | kubectl exec -i $$POD -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba
 else
 	@echo "INSERT INTO DEMO.SOURCE_ORDERS(ID, ORDER_NO, CUSTOMER_NAME, AMOUNT, STATUS) VALUES(5, 'ORD-005', 'Eve', 3100.00, 'PENDING'); COMMIT; EXIT;" | kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
 endif
@@ -207,7 +354,7 @@ test-update:
 	@echo "[INFO] Testing UPDATE..."
 ifeq ($(LIGHTWEIGHT),1)
 	@POD=$$(kubectl get pods -n $(NAMESPACE) -l app=oracle-db -o jsonpath='{.items[0].metadata.name}') && \
-	printf "UPDATE DEMO.SOURCE_ORDERS SET STATUS='COMPLETED', MODIFIED_AT=CURRENT_TIMESTAMP WHERE ID=1;\nCOMMIT;\nEXIT;\n" | kubectl exec -i $$POD -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	printf "UPDATE DEMO.SOURCE_ORDERS SET STATUS='COMPLETED', MODIFIED_AT=CURRENT_TIMESTAMP WHERE ID=1;\nCOMMIT;\nEXIT;\n" | kubectl exec -i $$POD -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba
 else
 	@echo "UPDATE DEMO.SOURCE_ORDERS SET STATUS='COMPLETED', MODIFIED_AT=CURRENT_TIMESTAMP WHERE ID=1; COMMIT; EXIT;" | kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
 endif
@@ -266,10 +413,10 @@ clean:
 reset: clean
 	@echo "[INFO] Dropping tables..."
 ifeq ($(LIGHTWEIGHT),1)
-	-@POD=$$(kubectl get pods -n $(NAMESPACE) -l app=oracle-db -o jsonpath='{.items[0].metadata.name}') && \
+	@POD=$$(kubectl get pods -n $(NAMESPACE) -l app=oracle-db -o jsonpath='{.items[0].metadata.name}') && \
 	echo "ALTER SESSION SET CONTAINER=$(ORACLE_PDB); DROP TABLE DEMO.SOURCE_ORDERS; EXIT;" | kubectl exec -i $$POD -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba
 else
-	-@echo "DROP TABLE DEMO.SOURCE_ORDERS; EXIT;" | kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	@echo "DROP TABLE DEMO.SOURCE_ORDERS; EXIT;" | kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
 endif
 	-@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e "DROP TABLE IF EXISTS target_database.target_orders;"
 	@echo "[OK] Reset completed"
@@ -281,6 +428,94 @@ endif
 # Full setup from scratch
 all: cluster deploy wait-ready e2e
 	@echo "[OK] Full E2E pipeline completed!"
+
+# Full setup with Debezium 3.4 image only
+all-debezium-3.4: cluster deploy-debezium-3.4 wait-ready e2e
+	@echo "[OK] Full E2E pipeline with Debezium 3.4 completed!"
+
+# Full setup with BOTH Debezium 2.x and 3.x
+all-dual: cluster deploy-dual wait-ready e2e-dual
+	@echo "[OK] Full E2E pipeline with Debezium 2.x and 3.x completed!"
+
+# =============================================================================
+# Build Targets
+# =============================================================================
+
+# Build Debezium 2.x Kafka Connect image
+build-debezium-2.x-image:
+	@echo "[INFO] Building Kafka Connect image with Debezium 2.x..."
+	cd $(ROOT_DIR) && docker build -t $(KAFKA_CONNECT_2X_IMAGE):$(KAFKA_CONNECT_2X_IMAGE_TAG) -f deployment/kafka-connect/docker/Dockerfile deployment/kafka-connect/docker
+	@echo "[INFO] Loading image into kind cluster..."
+	kind load docker-image $(KAFKA_CONNECT_2X_IMAGE):$(KAFKA_CONNECT_2X_IMAGE_TAG) --name $(CLUSTER_NAME)
+
+# Build Debezium 3.4 Kafka Connect image
+build-debezium-3.4-image:
+	@echo "[INFO] Building Kafka Connect image with Debezium 3.4..."
+	cd $(ROOT_DIR) && docker build -t $(KAFKA_CONNECT_3X_IMAGE):$(KAFKA_CONNECT_3X_IMAGE_TAG) -f deployment/kafka-connect/docker/Dockerfile.debezium-3.4 deployment/kafka-connect/docker
+	@echo "[INFO] Loading image into kind cluster..."
+	kind load docker-image $(KAFKA_CONNECT_3X_IMAGE):$(KAFKA_CONNECT_3X_IMAGE_TAG) --name $(CLUSTER_NAME)
+
+# Build both Debezium images
+build-all-images: build-debezium-2.x-image build-debezium-3.4-image
+	@echo "[OK] Both Debezium 2.x and 3.x images built"
+
+# =============================================================================
+# Deploy Targets
+# =============================================================================
+
+# Deploy all services with Debezium 3.4 image only
+deploy-debezium-3.4: build-debezium-3.4-image
+	@$(MAKE) -f $(HACK_DIR)/Makefile deploy KAFKA_CONNECT_IMAGE=$(KAFKA_CONNECT_3X_IMAGE) KAFKA_CONNECT_IMAGE_TAG=$(KAFKA_CONNECT_3X_IMAGE_TAG)
+
+# Deploy all services with BOTH Debezium 2.x and 3.x Kafka Connect instances
+deploy-dual: build-all-images
+	@echo "[INFO] Creating namespace '$(NAMESPACE)'..."
+	-kubectl create ns $(NAMESPACE)
+	kubectl config set-context --current --namespace $(NAMESPACE)
+	@echo "[INFO] Deploying Kafka..."
+	cd $(ROOT_DIR)/deployment/kafka && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka deployment/kafka -f deployment/kafka/values-kraft.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying Kafka Connect (Debezium 2.x)..."
+	cd $(ROOT_DIR)/deployment/kafka-connect && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect deployment/kafka-connect \
+		-f deployment/kafka-connect/values.yaml \
+		--set cp-kafka-connect.image=$(KAFKA_CONNECT_2X_IMAGE) \
+		--set cp-kafka-connect.imageTag=$(KAFKA_CONNECT_2X_IMAGE_TAG) \
+		-n $(NAMESPACE)
+	@echo "[INFO] Deploying Kafka Connect (Debezium 3.x)..."
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect-v3 deployment/kafka-connect \
+		-f deployment/kafka-connect/values.yaml \
+		--set cp-kafka-connect.image=$(KAFKA_CONNECT_3X_IMAGE) \
+		--set cp-kafka-connect.imageTag=$(KAFKA_CONNECT_3X_IMAGE_TAG) \
+		-n $(NAMESPACE)
+	@echo "[INFO] Deploying Kafka Connect UI..."
+	cd $(ROOT_DIR)/deployment/kafka-connect-ui && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect-ui deployment/kafka-connect-ui -f deployment/kafka-connect-ui/values.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying Redpanda Console..."
+	cd $(ROOT_DIR)/deployment/redpanda-console && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-redpanda-console deployment/redpanda-console -f deployment/redpanda-console/values.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying MariaDB..."
+	cd $(ROOT_DIR)/deployment/mariadb && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-mariadb deployment/mariadb -f deployment/mariadb/values.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying Minio..."
+	-kubectl delete -f $(ROOT_DIR)/helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) || true
+	kubectl apply -f $(ROOT_DIR)/helm-chart/minio/minio-dev.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying MSSQL..."
+	cd $(ROOT_DIR)/deployment/mssql && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-mssql deployment/mssql -f deployment/mssql/values.yaml -n $(NAMESPACE)
+ifeq ($(LIGHTWEIGHT),1)
+	@echo "[INFO] Deploying Oracle XE 21c (lightweight, ~2-3min startup)..."
+	kubectl apply -f $(ROOT_DIR)/deployment/oracle/oracle-free.yaml -n $(NAMESPACE)
+else
+	@echo "[INFO] Deploying Oracle EE 19c (full, ~10min startup)..."
+	cd $(ROOT_DIR)/deployment/oracle && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-oracle deployment/oracle -f deployment/oracle/values.yaml -n $(NAMESPACE)
+endif
+	@echo "[INFO] Deploying Curl Client..."
+	cd $(ROOT_DIR)/deployment/curl-client && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-curl-client deployment/curl-client -f deployment/curl-client/values.yaml -n $(NAMESPACE)
+	@echo "[OK] All services deployed (Debezium 2.x + 3.x)"
+
 
 # Check if tools are installed
 check-tools:
@@ -341,15 +576,23 @@ deploy: check-tools
 	-kubectl create ns $(NAMESPACE)
 	kubectl config set-context --current --namespace $(NAMESPACE)
 	@echo "[INFO] Deploying Kafka..."
+	cd $(ROOT_DIR)/deployment/kafka && helm dependency build
 	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka deployment/kafka -f deployment/kafka/values-kraft.yaml -n $(NAMESPACE)
 	@echo "[INFO] Deploying Kafka Connect..."
-	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect deployment/kafka-connect -f deployment/kafka-connect/values.yaml -n $(NAMESPACE)
+	cd $(ROOT_DIR)/deployment/kafka-connect && helm dependency build
+	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect deployment/kafka-connect \
+		-f deployment/kafka-connect/values.yaml \
+		--set cp-kafka-connect.image=$(KAFKA_CONNECT_IMAGE) \
+		--set cp-kafka-connect.imageTag=$(KAFKA_CONNECT_IMAGE_TAG) \
+		-n $(NAMESPACE)
 	@echo "[INFO] Deploying Kafka Connect UI..."
+	cd $(ROOT_DIR)/deployment/kafka-connect-ui && helm dependency build
 	cd $(ROOT_DIR) && helm upgrade --install dbrep-kafka-connect-ui deployment/kafka-connect-ui -f deployment/kafka-connect-ui/values.yaml -n $(NAMESPACE)
 	@echo "[INFO] Deploying Redpanda Console..."
 	cd $(ROOT_DIR)/deployment/redpanda-console && helm dependency build
 	cd $(ROOT_DIR) && helm upgrade --install dbrep-redpanda-console deployment/redpanda-console -f deployment/redpanda-console/values.yaml -n $(NAMESPACE)
 	@echo "[INFO] Deploying MariaDB..."
+	cd $(ROOT_DIR)/deployment/mariadb && helm dependency build
 	cd $(ROOT_DIR) && helm upgrade --install dbrep-mariadb deployment/mariadb -f deployment/mariadb/values.yaml -n $(NAMESPACE)
 	@echo "[INFO] Deploying Minio..."
 	-kubectl delete -f $(ROOT_DIR)/helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) || true
@@ -362,6 +605,7 @@ ifeq ($(LIGHTWEIGHT),1)
 	kubectl apply -f $(ROOT_DIR)/deployment/oracle/oracle-free.yaml -n $(NAMESPACE)
 else
 	@echo "[INFO] Deploying Oracle EE 19c (full, ~10min startup)..."
+	cd $(ROOT_DIR)/deployment/oracle && helm dependency build
 	cd $(ROOT_DIR) && helm upgrade --install dbrep-oracle deployment/oracle -f deployment/oracle/values.yaml -n $(NAMESPACE)
 endif
 	@echo "[INFO] Deploying Curl Client..."
@@ -378,11 +622,12 @@ else
 	-helm uninstall dbrep-oracle -n $(NAMESPACE)
 endif
 	-helm uninstall dbrep-mssql -n $(NAMESPACE)
-	-kubectl delete -f $(ROOT_DIR)/helm-chart/minio/minio-dev.yaml -n $(NAMESPACE)
+	-kubectl delete -f $(ROOT_DIR)/helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) || true
 	-helm uninstall dbrep-mariadb -n $(NAMESPACE)
 	-helm uninstall dbrep-redpanda-console -n $(NAMESPACE)
 	-helm uninstall dbrep-kafka-connect-ui -n $(NAMESPACE)
 	-helm uninstall dbrep-kafka-connect -n $(NAMESPACE)
+	-helm uninstall dbrep-kafka-connect-v3 -n $(NAMESPACE)
 	-helm uninstall dbrep-kafka -n $(NAMESPACE)
 	-helm uninstall dbrep-curl-client -n $(NAMESPACE)
 	@echo "[INFO] Deleting PVCs..."
@@ -397,20 +642,20 @@ else
 	@echo "[INFO] Waiting for pods to be ready (this may take 5-10 minutes)..."
 endif
 	@echo "[INFO] Waiting for Kafka..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kafka --timeout=300s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kafka --timeout=300s -n $(NAMESPACE) || true"
 	@echo "[INFO] Waiting for Kafka Connect..."
-	kubectl wait --for=condition=ready pod -l app=cp-kafka-connect --timeout=300s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app=cp-kafka-connect --timeout=300s -n $(NAMESPACE) || true"
 	@echo "[INFO] Waiting for MariaDB..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=mariadb --timeout=300s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=mariadb --timeout=300s -n $(NAMESPACE) || true"
 	@echo "[INFO] Waiting for Curl Client..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=curl-client --timeout=60s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=curl-client --timeout=60s -n $(NAMESPACE) || true"
 	@echo "[INFO] Waiting for Oracle..."
 ifeq ($(LIGHTWEIGHT),1)
-	kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=300s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=300s -n $(NAMESPACE) || true"
 	@echo "[INFO] Extra wait for Oracle initialization..."
 	sleep 30
 else
-	kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=600s -n $(NAMESPACE) || true
+	bash -c "kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=600s -n $(NAMESPACE) || true"
 	@echo "[INFO] Extra wait for Oracle initialization..."
 	sleep 60
 endif

@@ -24,6 +24,8 @@ redpanda-console:
     clusters:
       - name: kafka-connect
         url: http://dbrep-kafka-connect-cp-kafka-connect:8083
+      - name: kafka-connect-v3
+        url: http://dbrep-kafka-connect-v3-cp-kafka-connect:8083
 
   resources:
     limits: {}
