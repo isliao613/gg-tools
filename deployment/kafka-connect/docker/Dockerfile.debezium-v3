@@ -1,0 +1,102 @@
+# Stage 1: Build LegacyCharsetTransform SMT
+# Use Java 17 for Debezium 3.x compatibility
+FROM maven:3.9-eclipse-temurin-17 AS smt-builder
+
+WORKDIR /build
+
+# Create Maven project structure
+RUN mkdir -p src/main/java/com/example/debezium/smt
+
+# Copy pom.xml and Java source
+COPY smt/LegacyCharsetTransform/pom.xml .
+COPY smt/LegacyCharsetTransform/LegacyCharsetTransform.java src/main/java/com/example/debezium/smt/
+
+# Update pom.xml to use Java 17 for Debezium 3.x compatibility
+RUN sed -i 's/<maven.compiler.source>11</<maven.compiler.source>17</g' pom.xml && \
+    sed -i 's/<maven.compiler.target>11</<maven.compiler.target>17</g' pom.xml && \
+    sed -i 's/<source>11</<source>17</g' pom.xml && \
+    sed -i 's/<target>11</<target>17</g' pom.xml
+
+# Build JAR
+RUN mvn clean package -DskipTests -q
+
+# Stage 2: Build DB2 CDC Sink Connector
+# Use Java 17 for Debezium 3.x compatibility
+FROM maven:3.9-eclipse-temurin-17 AS sink-builder
+
+WORKDIR /build
+
+# Copy pom.xml and Java sources
+COPY sink/IidrCdcSinkConnector/pom.xml .
+COPY sink/IidrCdcSinkConnector/src/ src/
+
+# Update pom.xml to use Java 17 for Debezium 3.x compatibility
+RUN sed -i 's/<maven.compiler.source>11</<maven.compiler.source>17</g' pom.xml && \
+    sed -i 's/<maven.compiler.target>11</<maven.compiler.target>17</g' pom.xml && \
+    sed -i 's/<source>11</<source>17</g' pom.xml && \
+    sed -i 's/<target>11</<target>17</g' pom.xml
+
+# Build JAR
+RUN mvn clean package -DskipTests -q
+
+# Stage 3: Final Kafka Connect image
+# Use cp-kafka-connect 7.8.0 which includes Java 17 for Debezium 3.x support
+FROM confluentinc/cp-kafka-connect:7.8.0
+
+USER root
+
+ENV CONNECT_PLUGIN_PATH="/usr/share/java,/usr/share/confluent-hub-components"
+RUN confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:10.6.4
+RUN confluent-hub install --no-prompt confluentinc/kafka-connect-s3:10.6.7
+RUN confluent-hub install --no-prompt confluentinc/connect-transforms:1.4.6
+RUN confluent-hub install --no-prompt mongodb/kafka-connect-mongodb:2.0.0
+
+# Install debezium for Oracle
+RUN wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-oracle/3.4.0.Final/debezium-connector-oracle-3.4.0.Final-plugin.tar.gz
+RUN tar zxvf debezium-connector-oracle-3.4.0.Final-plugin.tar.gz -C /usr/share/java/
+RUN wget https://repo1.maven.org/maven2/com/oracle/database/xml/xdb/21.11.0.0/xdb-21.11.0.0.jar -P /usr/share/java/debezium-connector-oracle/
+# Install debezium for MySQL
+RUN wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/3.4.0.Final/debezium-connector-mysql-3.4.0.Final-plugin.tar.gz
+RUN tar zxvf debezium-connector-mysql-3.4.0.Final-plugin.tar.gz -C /usr/share/java/
+# Install debezium for SQLServer
+RUN wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-sqlserver/3.4.0.Final/debezium-connector-sqlserver-3.4.0.Final-plugin.tar.gz
+RUN tar zxvf debezium-connector-sqlserver-3.4.0.Final-plugin.tar.gz -C /usr/share/java/
+# Install debezium for MongoDB
+RUN wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-mongodb/3.4.0.Final/debezium-connector-mongodb-3.4.0.Final-plugin.tar.gz
+RUN tar zxvf debezium-connector-mongodb-3.4.0.Final-plugin.tar.gz -C /usr/share/java/
+
+# Install debezium for JDBC Sink
+RUN wget https://repo1.maven.org/maven2/io/debezium/debezium-connector-jdbc/3.4.0.Final/debezium-connector-jdbc-3.4.0.Final-plugin.tar.gz
+RUN tar zxvf debezium-connector-jdbc-3.4.0.Final-plugin.tar.gz -C /usr/share/java/
+
+# Must put the mysql, mariadb, clickhouse, sqlserver driver into jdbc folder
+## mysql
+RUN wget https://dev.mysql.com/get/Downloads/Connector-J/mysql-connector-j-8.0.32.tar.gz
+RUN tar zxvf mysql-connector-j-8.0.32.tar.gz -C /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib
+## mariadb
+RUN wget https://dlm.mariadb.com/2720710/Connectors/java/connector-java-3.1.2/mariadb-java-client-3.1.2.jar -P /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/
+## clickhouse
+RUN wget https://github.com/ClickHouse/clickhouse-java/releases/download/v0.4.6/clickhouse-jdbc-0.4.6.jar -P /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/
+## sqlserver
+RUN wget https://download.microsoft.com/download/9/e/9/9e97cef4-4c64-484c-bd1b-192147912c47/enu/sqljdbc_12.6.1.0_enu.tar.gz
+RUN tar zxvf sqljdbc_12.6.1.0_enu.tar.gz -C /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib
+RUN mv /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/sqljdbc_12.6/enu/jars/* /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/
+
+# Install JMX agent
+# ref: https://github.com/debezium/debezium-examples/blob/main/monitoring/debezium-jmx-exporter/Dockerfile
+# https://thedataguy.in/monitor-debezium-mysql-connector-with-prometheus-and-grafana/
+RUN mkdir /opt/jmx
+RUN wget https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/1.0.1/jmx_prometheus_javaagent-1.0.1.jar -O /opt/jmx/jmx_prometheus_javaagent.jar
+COPY config.yml /opt/jmx/config.yml
+COPY connect-distributed /usr/bin/connect-distributed
+
+# Copy LegacyCharsetTransform SMT JAR from builder stage
+COPY --from=smt-builder /build/target/legacy-charset-smt-1.0.0.jar /usr/share/java/legacy-charset-smt-1.0.0.jar
+
+# Create DB2 CDC Sink Connector plugin directory with JDBC drivers
+RUN mkdir -p /usr/share/java/db2-cdc-sink-connector
+COPY --from=sink-builder /build/target/iidr-cdc-sink-connector-1.0.0.jar /usr/share/java/iidr-cdc-sink-connector/
+# Copy JDBC drivers to connector plugin directory
+RUN cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mariadb-java-client-*.jar /usr/share/java/db2-cdc-sink-connector/ && \
+    cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mysql-connector-j-8.0.32/mysql-connector-j-8.0.32.jar /usr/share/java/db2-cdc-sink-connector/ && \
+    cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mssql-jdbc-*.jar /usr/share/java/db2-cdc-sink-connector/ 2>/dev/null || true

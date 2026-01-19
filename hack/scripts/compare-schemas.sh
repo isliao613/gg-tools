@@ -10,8 +10,8 @@ MARIADB_HOST=${MARIADB_HOST:-dbrep-mariadb.dev.svc.cluster.local}
 MARIADB_USER=${MARIADB_USER:-root}
 MARIADB_PASS=${MARIADB_PASS:-root_password}
 
-TABLE_2X=${TABLE_2X:-datatype_test_2x}
-TABLE_3X=${TABLE_3X:-datatype_test_3x}
+TABLE_2X=${TABLE_2X:-datatype_test_v2}
+TABLE_3X=${TABLE_3X:-datatype_test_v3}
 
 # Get schema info for both tables
 get_schema() {
@@ -41,22 +41,22 @@ echo "$SCHEMA_2X" > "$TMP_2X"
 echo "$SCHEMA_3X" > "$TMP_3X"
 
 # Compare line by line
-while IFS=$'\t' read -r col_name col_type_2x; do
+while IFS=$'\t' read -r col_name col_type_v2; do
     # Get corresponding type from 3.x
-    col_type_3x=$(grep "^$col_name	" "$TMP_3X" | cut -f2)
+    col_type_v3=$(grep "^$col_name	" "$TMP_3X" | cut -f2)
 
-    if [ -z "$col_type_3x" ]; then
-        col_type_3x="(missing)"
+    if [ -z "$col_type_v3" ]; then
+        col_type_v3="(missing)"
     fi
 
     # Check if different
-    if [ "$col_type_2x" = "$col_type_3x" ]; then
+    if [ "$col_type_v2" = "$col_type_v3" ]; then
         diff_marker="No"
     else
         diff_marker="**Yes**"
     fi
 
-    echo "| $col_name | \`$col_type_2x\` | \`$col_type_3x\` | $diff_marker |"
+    echo "| $col_name | \`$col_type_v2\` | \`$col_type_v3\` | $diff_marker |"
 done < "$TMP_2X"
 
 # Clean up
@@ -69,7 +69,7 @@ echo ""
 # Count differences
 DIFF_COUNT=$(kubectl exec $MARIADB_POD -n $NAMESPACE -- mysql -h $MARIADB_HOST -u$MARIADB_USER -p$MARIADB_PASS -N -e "
 SELECT COUNT(*) FROM (
-    SELECT c1.COLUMN_NAME, c1.COLUMN_TYPE as type_2x, c2.COLUMN_TYPE as type_3x
+    SELECT c1.COLUMN_NAME, c1.COLUMN_TYPE as type_v2, c2.COLUMN_TYPE as type_v3
     FROM information_schema.COLUMNS c1
     JOIN information_schema.COLUMNS c2
         ON c1.COLUMN_NAME = c2.COLUMN_NAME

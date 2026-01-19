@@ -1,0 +1,33 @@
+{
+    "name": "iidr_cdc_sink_connector",
+    "config": {
+        "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
+        "tasks.max": "1",
+
+        "topics": "iir.CDC.TRANSACTIONS,iir.CDC.ORDERS,iir.CDC.CUSTOMERS",
+
+        "connection.url": "jdbc:mariadb://dbrep-mariadb.dev.svc.cluster.local:3306/target_database",
+        "connection.user": "root",
+        "connection.password": "root_password",
+
+        "table.name.format": "${TableName}",
+        "corrupt.events.table": "streaming_corrupt_events",
+
+        "default.timezone": "Asia/Taipei",
+
+        "pk.mode": "record_key",
+        "pk.fields": "ID",
+
+        "auto.create": "true",
+        "auto.evolve": "false",
+
+        "batch.size": "3000",
+        "max.retries": "10",
+        "retry.backoff.ms": "3000",
+
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false"
+    }
+}

@@ -1,13 +1,13 @@
 {
-    "name": "sink_cdc_oracle_to_mariadb",
+    "name": "sink_cdc_oracle_to_mariadb_v2",
     "config": {
         "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
         "tasks.max": "1",
         "connection.url": "jdbc:mariadb://dbrep-mariadb.dev.svc.cluster.local:3306/target_database",
         "connection.user": "root",
         "connection.password": "root_password",
-        "topics": "cdc_oracle.DEMO.SOURCE_ORDERS",
-        "table.name.format": "target_orders",
+        "topics": "cdc_oracle_v2.DEMO.SOURCE_ORDERS",
+        "table.name.format": "target_orders_v2",
         "auto.create": "true",
         "auto.evolve": "true",
         "insert.mode": "upsert",

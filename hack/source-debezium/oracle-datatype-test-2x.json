@@ -1,5 +1,5 @@
 {
-    "name": "source_cdc_oracle_datatype_v3",
+    "name": "source_cdc_oracle_datatype_v2",
     "config": {
         "connector.class": "io.debezium.connector.oracle.OracleConnector",
         "tasks.max": "1",
@@ -10,9 +10,9 @@
         "database.dbname": "XE",
         "database.pdb.name": "XEPDB1",
         "schema.history.internal.kafka.bootstrap.servers": "dbrep-kafka.dev.svc.cluster.local:9092",
-        "schema.history.internal.kafka.topic": "schema-changes.oracle.datatype.v3",
+        "schema.history.internal.kafka.topic": "schema-changes.oracle.datatype.v2",
         "table.include.list": "DEMO.DATATYPE_TEST",
-        "topic.prefix": "cdc_oracle_dt",
+        "topic.prefix": "cdc_oracle_dt_v2",
         "key.converter": "org.apache.kafka.connect.json.JsonConverter",
         "value.converter": "org.apache.kafka.connect.json.JsonConverter",
         "key.converter.schemas.enable": "true",

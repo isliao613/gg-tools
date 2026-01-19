@@ -1,13 +1,13 @@
 {
-    "name": "sink_cdc_oracle_datatype_v3",
+    "name": "sink_cdc_oracle_datatype_v2",
     "config": {
         "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
         "tasks.max": "1",
         "connection.url": "jdbc:mariadb://dbrep-mariadb.dev.svc.cluster.local:3306/target_database",
         "connection.user": "root",
         "connection.password": "root_password",
-        "topics": "cdc_oracle_dt.DEMO.DATATYPE_TEST",
-        "table.name.format": "datatype_test_2x",
+        "topics": "cdc_oracle_dt_v2.DEMO.DATATYPE_TEST",
+        "table.name.format": "datatype_test_v2",
         "auto.create": "true",
         "auto.evolve": "true",
         "insert.mode": "upsert",

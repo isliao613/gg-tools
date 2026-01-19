@@ -1,0 +1,142 @@
+# Makefile.e2e
+
+# ==============================================================================
+# End-to-end testing specific configuration
+# ==============================================================================
+#
+# Define end-to-end testing specific configuration in this file.
+#
+# ==============================================================================
+
+# Register connectors on Debezium 2.x
+register-v2:
+	@echo "[INFO] Registering connectors on Debezium 2.x ($(KAFKA_CONNECT_2X_SVC))..."
+	kubectl cp hack/source-debezium/oracle-free-demo-2x.json $(CURL_POD):/tmp/source-connector-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-2x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-demo-2x.json $(CURL_POD):/tmp/sink-connector-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-2x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[OK] Debezium 2.x connectors registered"
+
+# Register connectors on Debezium 3.x
+register-v3:
+	@echo "[INFO] Registering connectors on Debezium 3.x ($(KAFKA_CONNECT_3X_SVC))..."
+	kubectl cp hack/source-debezium/oracle-free-demo-3x.json $(CURL_POD):/tmp/source-connector-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-3x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-demo-3x.json $(CURL_POD):/tmp/sink-connector-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-3x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[OK] Debezium 3.x connectors registered"
+
+# Verify data in MariaDB target_database.target_orders (via Debezium 2.x)
+verify-v2:
+	@echo "[INFO] Data in MariaDB target_database.target_orders_v2 (via Debezium 2.x):"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.target_orders_v2 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+
+# Verify data in MariaDB target_database.target_orders_v3 (via Debezium 3.x)
+verify-v3:
+	@echo "[INFO] Data in MariaDB target_database.target_orders_v3 (via Debezium 3.x):"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.target_orders_v3 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+
+# End-to-end tests
+test: test-setup test-run test-verify test-clean
+
+# Setup for end-to-end tests
+test-setup: setup-oracle setup-mariadb
+
+# Oracle setup for end-to-end tests
+setup-oracle:
+	@echo "[INFO] Setting up Oracle XE 21c..."
+	@echo "[INFO] Step 1: Enabling ARCHIVELOG mode..."
+	kubectl cp hack/sql/oracle-xe-archivelog.sql $(ORACLE_POD):/tmp/archivelog.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S / as sysdba @/tmp/archivelog.sql
+	@echo "[INFO] Waiting for PDB to be fully open..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		OPEN_MODE=$$(kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- bash -c "echo 'SELECT open_mode FROM v\$$pdbs WHERE name='\''XEPDB1'\'';' | sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba" 2>/dev/null | grep -o 'READ WRITE' || true); \
+		if [ "$$OPEN_MODE" = "READ WRITE" ]; then echo "[INFO] PDB is open"; break; fi; \
+		echo "[INFO] Waiting for PDB... ($$i/10)"; sleep 3; \
+	done
+	@echo "[INFO] Step 2: Creating CDC user in CDB..."
+	kubectl cp hack/sql/oracle-xe-cdc-user.sql $(ORACLE_POD):/tmp/cdc-user.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba @/tmp/cdc-user.sql
+	@echo "[INFO] Step 3: Propagating CDC user to PDB..."
+	kubectl cp hack/sql/oracle-xe-pdb-user.sql $(ORACLE_POD):/tmp/pdb-user.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba @/tmp/pdb-user.sql
+	@echo "[INFO] Step 4: Creating DEMO schema and source table..."
+	kubectl cp hack/sql/oracle-xe-demo-schema.sql $(ORACLE_POD):/tmp/demo-schema.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba @/tmp/demo-schema.sql
+	@echo "[OK] Oracle setup completed"
+
+# MariaDB setup for end-to-end tests
+setup-mariadb:
+	@echo "[INFO] Setting up MariaDB..."
+	kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"CREATE DATABASE IF NOT EXISTS target_database DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; DROP TABLE IF EXISTS target_database.target_orders_v2; DROP TABLE IF EXISTS target_database.target_orders_v3;"
+	@echo "[OK] MariaDB setup completed"
+
+# Run end-to-end tests
+test-run:
+	@echo "[INFO] Running CDC tests..."
+	@echo "[INFO] Testing INSERT..."
+	@printf "INSERT INTO DEMO.SOURCE_ORDERS(ID, ORDER_NO, CUSTOMER_NAME, AMOUNT, STATUS) VALUES(5, 'ORD-005', 'Eve', 3100.00, 'PENDING');\nCOMMIT;\nEXIT;\n" \
+		| kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	@echo "[INFO] Waiting 5s for replication..." && sleep 5
+	@echo "[INFO] Testing UPDATE..."
+	@printf "UPDATE DEMO.SOURCE_ORDERS SET STATUS='COMPLETED', MODIFIED_AT=CURRENT_TIMESTAMP WHERE ID=1;\nCOMMIT;\nEXIT;\n" \
+		| kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	@echo "[INFO] Waiting 5s for replication..." && sleep 5
+	@echo "[INFO] Testing DELETE..."
+	@printf "DELETE FROM DEMO.SOURCE_ORDERS WHERE ID=3;\nCOMMIT;\nEXIT;\n" \
+		| kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	@echo "[INFO] Waiting 5s for replication..." && sleep 5
+
+# Verify end-to-end tests
+test-verify: verify-v2 verify-v3
+
+# Clean up end-to-end tests
+test-clean: test-clean-v2 test-clean-v3
+	@echo "[INFO] Dropping Oracle source table..."
+	@echo "ALTER SESSION SET CONTAINER=$(ORACLE_PDB); DROP TABLE DEMO.SOURCE_ORDERS; EXIT;" \
+		| kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba
+	@echo "[INFO] Dropping MariaDB target tables..."
+	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) \
+		-e "DROP TABLE IF EXISTS target_database.target_orders_v2; DROP TABLE IF EXISTS target_database.target_orders_v3;"
+	@echo "[OK] Reset completed"
+
+# Clean up Debezium 2.x connectors
+test-clean-v2:
+	@echo "[INFO] Deleting Debezium 2.x connectors..."
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/source_cdc_oracle_demo_v2
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/sink_cdc_oracle_to_mariadb_v2
+	@echo "[OK] Debezium 2.x connectors deleted"
+
+# Clean up Debezium 3.x connectors
+test-clean-v3:
+	@echo "[INFO] Deleting Debezium 3.x connectors..."
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/source_cdc_oracle_demo_v3
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/sink_cdc_oracle_to_mariadb_v3
+	@echo "[OK] Debezium 3.x connectors deleted"

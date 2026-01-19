@@ -1,0 +1,37 @@
+# Makefile.param
+
+# ==============================================================================
+# Project specific configuration
+# ==============================================================================
+#
+# Define project wide configuration in this file.
+#
+# ==============================================================================
+
+# General settings
+NAMESPACE ?= dev
+CLUSTER_NAME ?= kafka-dbsync
+
+# Oracle configuration (Oracle XE 21c)
+ORACLE_SID ?= XE
+ORACLE_PDB ?= XEPDB1
+
+# Kafka Connect images
+KAFKA_CONNECT_2X_IMAGE ?= kafka-dbsync/cp-kafka-connect-debezium
+KAFKA_CONNECT_2X_IMAGE_TAG ?= 2.x
+KAFKA_CONNECT_3X_IMAGE ?= kafka-dbsync/cp-kafka-connect-debezium
+KAFKA_CONNECT_3X_IMAGE_TAG ?= 3.4.0
+
+# Kafka Connect services
+KAFKA_CONNECT_2X_SVC ?= dbrep-kafka-connect-cp-kafka-connect
+KAFKA_CONNECT_3X_SVC ?= dbrep-kafka-connect-v3-cp-kafka-connect
+
+# MariaDB configuration
+MARIADB_POD ?= dbrep-mariadb-0
+MARIADB_HOST ?= dbrep-mariadb.dev.svc.cluster.local
+MARIADB_USER ?= root
+MARIADB_PASS ?= root_password
+
+# Internal helpers
+CURL_POD = $(shell kubectl get pod -l app.kubernetes.io/name=curl-client -n $(NAMESPACE) -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+ORACLE_POD = $(shell kubectl get pods -n $(NAMESPACE) -l app=oracle-db -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)

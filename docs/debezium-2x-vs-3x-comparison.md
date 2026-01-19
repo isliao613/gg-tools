@@ -66,9 +66,9 @@ FROM confluentinc/cp-kafka-connect:7.8.0
 
 | Setting | 2.x Value | 3.x Value |
 |---------|-----------|-----------|
-| `name` | `source_cdc_oracle_demo` | `source_cdc_oracle_demo_3x` |
-| `topic.prefix` | `cdc_oracle` | `cdc_oracle_3x` |
-| `schema.history.internal.kafka.topic` | `schema-changes.oracle` | `schema-changes.oracle.3x` |
+| `name` | `source_cdc_oracle_demo_v2` | `source_cdc_oracle_demo_v3` |
+| `topic.prefix` | `cdc_oracle_v2` | `cdc_oracle_v3` |
+| `schema.history.internal.kafka.topic` | `schema-changes.oracle.v2` | `schema-changes.oracle.v3` |
 
 ### Sink Connector (JDBC to MariaDB)
 
@@ -76,9 +76,9 @@ FROM confluentinc/cp-kafka-connect:7.8.0
 
 | Setting | 2.x Value | 3.x Value |
 |---------|-----------|-----------|
-| `name` | `sink_cdc_oracle_to_mariadb` | `sink_cdc_oracle_to_mariadb_3x` |
-| `topics` | `cdc_oracle.DEMO.SOURCE_ORDERS` | `cdc_oracle_3x.DEMO.SOURCE_ORDERS` |
-| `table.name.format` | `target_orders` | `target_orders_3x` |
+| `name` | `sink_cdc_oracle_to_mariadb_v2` | `sink_cdc_oracle_to_mariadb_v3` |
+| `topics` | `cdc_oracle_v2.DEMO.SOURCE_ORDERS` | `cdc_oracle_v3.DEMO.SOURCE_ORDERS` |
+| `table.name.format` | `target_orders_v2` | `target_orders_v3` |
 
 ## 4. Data Type Mapping (Oracle to MariaDB)
 
@@ -165,9 +165,9 @@ Debezium 3.x Service: dbrep-kafka-connect-v3-cp-kafka-connect:8083
 
 | Component | 2.x Topic | 3.x Topic |
 |-----------|-----------|-----------|
-| CDC Data | `cdc_oracle.DEMO.SOURCE_ORDERS` | `cdc_oracle_3x.DEMO.SOURCE_ORDERS` |
-| Schema History | `schema-changes.oracle` | `schema-changes.oracle.3x` |
-| Target Table | `target_orders` | `target_orders_3x` |
+| CDC Data | `cdc_oracle_v2.DEMO.SOURCE_ORDERS` | `cdc_oracle_v3.DEMO.SOURCE_ORDERS` |
+| Schema History | `schema-changes.oracle.v2` | `schema-changes.oracle.v3` |
+| Target Table | `target_orders_v2` | `target_orders_v3` |
 
 ## 7. Migration Recommendations
 
@@ -195,15 +195,15 @@ Debezium 3.x Service: dbrep-kafka-connect-v3-cp-kafka-connect:8083
 make all-dual
 
 # Register connectors on both versions
-make register-2x
-make register-3x
+make register-v2
+make register-v3
 
 # Verify data replication
-make verify-2x  # Check target_orders
-make verify-3x  # Check target_orders_3x
+make verify-v2  # Check target_orders_v2
+make verify-v3  # Check target_orders_v3
 
 # Clean up
-make clean-dual
+make test-clean
 ```
 
 ### Data Type Comparison Testing
@@ -212,17 +212,15 @@ For comprehensive data type testing between Debezium 2.x and 3.x:
 
 ```bash
 # Run full datatype comparison E2E test
-make e2e-datatype-dual
+make datatype-all-v2
+make datatype-all-v3
 
 # Or run individual steps:
-make setup-datatype       # Create DATATYPE_TEST table with 30+ column types
-make register-datatype-2x # Register connectors on Debezium 2.x
-make register-datatype-3x # Register connectors on Debezium 3.x
-make verify-datatype      # View data in both MariaDB tables
-make compare-datatype     # Generate schema comparison report
-
-# Clean up datatype connectors
-make clean-datatype
+make datatype-setup       # Create DATATYPE_TEST table with 30+ column types
+make datatype-register-v2 # Register connectors on Debezium 2.x
+make datatype-register-v3 # Register connectors on Debezium 3.x
+make datatype-verify      # View data in both MariaDB tables
+make datatype-clean       # Delete datatype connectors and tables
 ```
 
 The comparison report is generated at `docs/debezium-datatype-comparison-results.md`.
@@ -243,7 +241,8 @@ The comparison report is generated at `docs/debezium-datatype-comparison-results
 
 To run your own comparison:
 ```bash
-make e2e-datatype-dual
+make datatype-all-v2
+make datatype-all-v3
 ```
 
 ### Historical Test Results (with decimal.handling.mode=double)

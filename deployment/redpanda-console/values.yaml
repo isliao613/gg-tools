@@ -3,7 +3,7 @@ redpanda-console:
 
   image:
     repository: redpandadata/console
-    tag: v3.4.0
+    tag: v3.3.2
     pullPolicy: IfNotPresent
 
   nameOverride: ""
@@ -22,7 +22,7 @@ redpanda-console:
   connect:
     enabled: true
     clusters:
-      - name: kafka-connect
+      - name: kafka-connect-v2
         url: http://dbrep-kafka-connect-cp-kafka-connect:8083
       - name: kafka-connect-v3
         url: http://dbrep-kafka-connect-v3-cp-kafka-connect:8083
