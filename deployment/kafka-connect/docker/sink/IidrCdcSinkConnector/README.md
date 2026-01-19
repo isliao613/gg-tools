@@ -7,8 +7,10 @@ A Kafka Connect Sink Connector for processing IIDR CDC events based on the IBM J
 This connector consumes CDC events from Kafka topics with IIDR-specific headers and writes them to a target JDBC database. It handles:
 
 - **A_ENTTYP Header Mapping**: Maps IBM Journal Entry Type codes to database operations
+- **Idempotent Replay**: All INSERT and UPDATE operations use UPSERT for safe replay
 - **Timezone Conversion**: Converts A_TIMSTAMP to ISO8601 with configurable timezone
-- **Corrupt Event Routing**: Invalid events are routed to a dedicated error table
+- **Configurable Error Handling**: Choose to fail, log, or silently skip corrupt events
+- **Optional Corrupt Event Routing**: Invalid events can be routed to a dedicated error table
 
 ## Event Structure Overview
 Each Kafka event consists of three primary components. All components are delivered in JSON format or as Kafka Metadata Headers.
@@ -38,10 +40,13 @@ The following headers must be set via the Kafka Client (typically via IIDR KCOP 
 
 ## A_ENTTYP Operation Mapping
 
+All INSERT and UPDATE codes are mapped to UPSERT for idempotent replay:
+
 | Target Operation | A_ENTTYP Codes | Description |
 |------------------|----------------|-------------|
-| INSERT | PT, RR, PX, UR | New record insertion |
-| UPDATE | UP, FI, FP | Record modification |
+| UPSERT | PT, RR, PX | New record insertion (mapped to UPSERT) |
+| UPSERT | UP, FI, FP | Record modification (mapped to UPSERT) |
+| UPSERT | UR | Appears in both INSERT and UPDATE |
 | DELETE | DL, DR | Record deletion |
 
 ## Event Examples
@@ -88,11 +93,22 @@ The A_TIMSTAMP field is not ISO8601 compliant. The ingestion job interprets this
 Example: If Config TZ is Asia/Taipei (+08:00), then 2026-01-15 11:17:14.000000 is processed as 2026-01-15T11:17:14.000000+08:00.
 
 ## Error Handling
-Events will be moved to `streaming_corrupt_events` if:
-- `A_ENTTYP` is missing or contains an unrecognized code.
-- `TableName` does not match the configured mapping.
-- A `DELETE` event is received without a Kafka Key.
-- An `INSERT`/`UPDATE` event is received with a null Value.
+
+The connector provides flexible error handling via the `errors.tolerance` configuration:
+
+| Mode | Behavior |
+|------|----------|
+| `none` | Fail the task immediately when encountering a corrupt event |
+| `log` | Log a warning and skip the corrupt event (default) |
+| `all` | Silently skip corrupt events |
+
+Events are considered corrupt if:
+- `A_ENTTYP` is missing or contains an unrecognized code
+- `TableName` header is missing
+- A `DELETE` event is received without a Kafka Key
+- An `INSERT`/`UPDATE` event is received with a null Value
+
+Optionally, corrupt events can also be written to a database table by configuring `corrupt.events.table`.
 
 ## Configuration Properties
 
@@ -108,8 +124,14 @@ Events will be moved to `streaming_corrupt_events` if:
 
 | Property | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `table.name.format` | Target table name format. Use `${TableName}` for header value, `${topic}` for topic name | No | `${TableName}` |
-| `corrupt.events.table` | Table name for corrupt/invalid events | No | `streaming_corrupt_events` |
+| `table.name.format` | Target table name. Use `${TableName}` for header value, `${topic}` for topic name, or a static name | No | `${TableName}` |
+
+### Error Handling
+
+| Property | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `errors.tolerance` | Behavior for corrupt events: `none` (fail), `log` (warn and skip), `all` (silent skip) | No | `log` |
+| `corrupt.events.table` | Table name for corrupt/invalid events. Leave empty to disable. | No | (empty/disabled) |
 
 ### Timezone
 
@@ -139,7 +161,11 @@ Events will be moved to `streaming_corrupt_events` if:
 | `max.retries` | Maximum number of retries on transient errors | No | `10` |
 | `retry.backoff.ms` | Backoff time in milliseconds between retries | No | `3000` |
 
-## Example Configuration
+## Example Configurations
+
+### Single Connector (Multiple Tables)
+
+A single connector handling multiple tables via the `${TableName}` header:
 
 ```json
 {
@@ -147,14 +173,14 @@ Events will be moved to `streaming_corrupt_events` if:
     "config": {
         "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
         "tasks.max": "1",
-        "topics": "iir.CDC.TRANSACTIONS",
+        "topics": "iidr.CDC.ORDERS,iidr.CDC.PRODUCTS",
 
         "connection.url": "jdbc:mariadb://localhost:3306/target_db",
         "connection.user": "root",
         "connection.password": "password",
 
-        "table.name.format": "${TableName}",
-        "corrupt.events.table": "streaming_corrupt_events",
+        "table.name.format": "IIDR_${TableName}",
+        "errors.tolerance": "log",
         "default.timezone": "Asia/Taipei",
 
         "pk.mode": "record_key",
@@ -169,9 +195,104 @@ Events will be moved to `streaming_corrupt_events` if:
 }
 ```
 
+### Multi-Connector Setup (One Connector Per Table)
+
+For better isolation and independent scaling, use separate connectors for each table:
+
+**Orders Connector:**
+```json
+{
+    "name": "iidr_cdc_sink_orders",
+    "config": {
+        "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
+        "tasks.max": "1",
+        "topics": "iidr.CDC.ORDERS",
+
+        "connection.url": "jdbc:mariadb://localhost:3306/target_db",
+        "connection.user": "root",
+        "connection.password": "password",
+
+        "table.name.format": "IIDR_ORDERS",
+        "errors.tolerance": "log",
+        "default.timezone": "Asia/Taipei",
+
+        "pk.mode": "record_key",
+        "pk.fields": "ORDER_ID",
+        "auto.create": "true",
+
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false"
+    }
+}
+```
+
+**Products Connector:**
+```json
+{
+    "name": "iidr_cdc_sink_products",
+    "config": {
+        "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
+        "tasks.max": "1",
+        "topics": "iidr.CDC.PRODUCTS",
+
+        "connection.url": "jdbc:mariadb://localhost:3306/target_db",
+        "connection.user": "root",
+        "connection.password": "password",
+
+        "table.name.format": "IIDR_PRODUCTS",
+        "errors.tolerance": "log",
+        "default.timezone": "Asia/Taipei",
+
+        "pk.mode": "record_key",
+        "pk.fields": "PRODUCT_ID",
+        "auto.create": "true",
+
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false"
+    }
+}
+```
+
+### With Corrupt Events Table
+
+Enable corrupt event logging to a database table:
+
+```json
+{
+    "name": "iidr_cdc_sink_with_error_table",
+    "config": {
+        "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
+        "tasks.max": "1",
+        "topics": "iidr.CDC.TRANSACTIONS",
+
+        "connection.url": "jdbc:mariadb://localhost:3306/target_db",
+        "connection.user": "root",
+        "connection.password": "password",
+
+        "table.name.format": "IIDR_TRANSACTIONS",
+        "errors.tolerance": "log",
+        "corrupt.events.table": "streaming_corrupt_events",
+        "default.timezone": "Asia/Taipei",
+
+        "pk.mode": "record_key",
+        "pk.fields": "TRANSACTION_ID",
+        "auto.create": "true",
+
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false"
+    }
+}
+```
+
 ## Corrupt Events Table Schema
 
-The table schema:
+When `corrupt.events.table` is configured, corrupt events are written to a table with this schema:
 
 ```sql
 CREATE TABLE streaming_corrupt_events (
@@ -197,8 +318,8 @@ CREATE TABLE streaming_corrupt_events (
 The connector is built as part of the Kafka Connect Docker image:
 
 ```bash
-cd deployment/kafka-connect/docker
-./build.sh
+make build-v2  # For Debezium 2.x
+make build-v3  # For Debezium 3.x
 ```
 
 ## Deployment
@@ -208,13 +329,28 @@ Register the connector via Kafka Connect REST API:
 ```bash
 curl -X POST http://localhost:8083/connectors \
   -H "Content-Type: application/json" \
-  -d @hack/sink-jdbc/iidr_cdc_sink.json
+  -d @hack/sink-jdbc/iidr_cdc_sink-test.json
 ```
 
 Check connector status:
 
 ```bash
-curl http://localhost:8083/connectors/iidr_cdc_sink_connector/status
+curl http://localhost:8083/connectors/iidr_cdc_sink_test/status
+```
+
+## Testing
+
+Run the E2E test suite:
+
+```bash
+# Single table test with Debezium 2.x
+make iidr-all-v2
+
+# Single table test with Debezium 3.x
+make iidr-all-v3
+
+# Test with both versions
+make iidr-all-dual
 ```
 
 ## Compatibility

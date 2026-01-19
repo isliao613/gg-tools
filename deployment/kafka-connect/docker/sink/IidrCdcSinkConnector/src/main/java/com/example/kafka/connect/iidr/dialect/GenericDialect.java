@@ -75,18 +75,22 @@ public class GenericDialect implements Dialect {
 
 
     @Override
+    @SuppressWarnings("unchecked")
     public String buildCreateTableSql(String tableName, ProcessedRecord sample) {
         StringBuilder ddl = new StringBuilder();
         ddl.append("CREATE TABLE ").append(tableName).append(" (");
 
         List<String> columns = new java.util.ArrayList<>();
+        java.util.Map<String, Object> valueMap = null;
+
         if (sample.getValue() instanceof org.apache.kafka.connect.data.Struct) {
             org.apache.kafka.connect.data.Struct struct = (org.apache.kafka.connect.data.Struct) sample.getValue();
             for (org.apache.kafka.connect.data.Field field : struct.schema().fields()) {
                 columns.add(field.name());
             }
         } else if (sample.getValue() instanceof java.util.Map) {
-            columns.addAll(((java.util.Map) sample.getValue()).keySet());
+            valueMap = (java.util.Map<String, Object>) sample.getValue();
+            columns.addAll(valueMap.keySet());
         }
 
         for (int i = 0; i < columns.size(); i++) {
@@ -94,11 +98,90 @@ public class GenericDialect implements Dialect {
                 ddl.append(", ");
             }
             String columnName = columns.get(i);
-            Schema fieldSchema = sample.getValueSchema() != null ? sample.getValueSchema().field(columnName).schema() : null;
-            ddl.append(columnName).append(" ").append(getColumnType(fieldSchema));
+            Schema fieldSchema = null;
+            if (sample.getValueSchema() != null && sample.getValueSchema().field(columnName) != null) {
+                fieldSchema = sample.getValueSchema().field(columnName).schema();
+            }
+            String columnType = getColumnType(fieldSchema);
+            // For schemaless data, infer type from value
+            if (fieldSchema == null && valueMap != null) {
+                columnType = inferColumnType(valueMap.get(columnName));
+            }
+            ddl.append(columnName).append(" ").append(columnType);
         }
         ddl.append(")");
         return ddl.toString();
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
+    public String buildCreateTableSql(String tableName, ProcessedRecord sample, List<String> pkColumns) {
+        StringBuilder ddl = new StringBuilder();
+        ddl.append("CREATE TABLE ").append(tableName).append(" (");
+
+        List<String> columns = new java.util.ArrayList<>();
+        java.util.Map<String, Object> valueMap = null;
+
+        if (sample.getValue() instanceof org.apache.kafka.connect.data.Struct) {
+            org.apache.kafka.connect.data.Struct struct = (org.apache.kafka.connect.data.Struct) sample.getValue();
+            for (org.apache.kafka.connect.data.Field field : struct.schema().fields()) {
+                columns.add(field.name());
+            }
+        } else if (sample.getValue() instanceof java.util.Map) {
+            valueMap = (java.util.Map<String, Object>) sample.getValue();
+            columns.addAll(valueMap.keySet());
+        }
+
+        for (int i = 0; i < columns.size(); i++) {
+            if (i > 0) {
+                ddl.append(", ");
+            }
+            String columnName = columns.get(i);
+            Schema fieldSchema = null;
+            if (sample.getValueSchema() != null && sample.getValueSchema().field(columnName) != null) {
+                fieldSchema = sample.getValueSchema().field(columnName).schema();
+            }
+            String columnType = getColumnType(fieldSchema);
+            // For schemaless data, infer type from value
+            if (fieldSchema == null && valueMap != null) {
+                columnType = inferColumnType(valueMap.get(columnName));
+            }
+            ddl.append(columnName).append(" ").append(columnType);
+        }
+
+        // Add primary key constraint if specified
+        if (pkColumns != null && !pkColumns.isEmpty()) {
+            ddl.append(", PRIMARY KEY (").append(String.join(", ", pkColumns)).append(")");
+        }
+
+        ddl.append(")");
+        return ddl.toString();
+    }
+
+    /**
+     * Infer column type from a Java value (for schemaless data).
+     */
+    protected String inferColumnType(Object value) {
+        if (value == null) {
+            return "VARCHAR(1024)";
+        }
+        if (value instanceof Integer || value instanceof Long) {
+            return "BIGINT";
+        }
+        if (value instanceof Double || value instanceof Float) {
+            return "DOUBLE";
+        }
+        if (value instanceof Boolean) {
+            return "BOOLEAN";
+        }
+        if (value instanceof String) {
+            String str = (String) value;
+            if (str.length() > 255) {
+                return "TEXT";
+            }
+            return "VARCHAR(1024)";
+        }
+        return "VARCHAR(1024)";
     }
 
     @Override

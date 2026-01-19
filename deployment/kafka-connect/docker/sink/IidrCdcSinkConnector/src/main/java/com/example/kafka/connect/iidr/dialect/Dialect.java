@@ -44,6 +44,11 @@ public interface Dialect {
     String buildCreateTableSql(String tableName, ProcessedRecord sample);
 
     /**
+     * Build a CREATE TABLE statement with primary key support.
+     */
+    String buildCreateTableSql(String tableName, ProcessedRecord sample, List<String> pkColumns);
+
+    /**
      * Build an ALTER TABLE statement to add new columns.
      */
     String buildAlterTableSql(String tableName, List<String> missingColumns, ProcessedRecord sample);

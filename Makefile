@@ -16,6 +16,10 @@ include Makefile.e2e
 	test test-setup test-run test-verify test-clean test-clean-v2 test-clean-v3 \
 	setup-oracle setup-mariadb \
 	register-v2 register-v3 verify-v2 verify-v3 \
+	datatype-all-v2 datatype-all-v3 datatype-all-dual datatype-setup \
+	datatype-register-v2 datatype-register-v3 datatype-verify datatype-clean \
+	iidr-all-v2 iidr-all-v3 iidr-all-dual iidr-setup iidr-register-v2 iidr-register-v3 \
+	iidr-run iidr-verify iidr-status-v2 iidr-status-v3 iidr-clean \
 	logs-v2 logs-v3 status-v2 status-v3 port-forward
 
 help:
@@ -47,6 +51,19 @@ help:
 	@echo "  datatype-register-v3 - Register Debezium 3.x connectors for datatype testing"
 	@echo "  datatype-verify      - Verify data in MariaDB for datatype testing"
 	@echo "  datatype-clean       - Clean up connectors and tables for datatype testing"
+	@echo ""
+	@echo "IIDR CDC Sink Testing:"
+	@echo "  iidr-all-v2          - Full IIDR CDC sink test with Debezium 2.x"
+	@echo "  iidr-all-v3          - Full IIDR CDC sink test with Debezium 3.x"
+	@echo "  iidr-all-dual        - Full IIDR CDC sink test with both 2.x and 3.x"
+	@echo "  iidr-setup           - Set up Kafka topic and MariaDB for IIDR testing"
+	@echo "  iidr-register-v2     - Register IIDR sink connector on Debezium 2.x"
+	@echo "  iidr-register-v3     - Register IIDR sink connector on Debezium 3.x"
+	@echo "  iidr-run             - Produce test IIDR CDC events to Kafka"
+	@echo "  iidr-verify          - Verify data in MariaDB for IIDR testing"
+	@echo "  iidr-status-v2       - Check IIDR sink connector status on 2.x"
+	@echo "  iidr-status-v3       - Check IIDR sink connector status on 3.x"
+	@echo "  iidr-clean           - Clean up IIDR test resources"
 	@echo ""
 	@echo "Utilities:"
 	@echo "  logs-v2              - View logs of Debezium 2.x Kafka Connect"
@@ -248,6 +265,108 @@ datatype-clean:
 	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) \
 		-e "DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;"
 	@echo "[OK] Datatype cleanup completed"
+
+# =============================================================================
+# IIDR CDC Sink Testing
+# =============================================================================
+
+IIDR_TOPIC := iidr.CDC.TEST_ORDERS
+IIDR_CONNECTOR := iidr_cdc_sink_test
+
+iidr-all-v2: base-infra-up build-v2 iidr-setup iidr-register-v2 iidr-run iidr-verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x completed!"
+
+iidr-all-v3: base-infra-up build-v3 iidr-setup iidr-register-v3 iidr-run iidr-verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 3.x completed!"
+
+iidr-all-dual: base-infra-up build-v2 build-v3 iidr-setup iidr-register-v2 iidr-register-v3 iidr-run iidr-verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x and 3.x completed!"
+
+iidr-setup:
+	@echo "[INFO] Setting up IIDR CDC sink test environment..."
+	@echo "[INFO] Creating Kafka topic: $(IIDR_TOPIC)..."
+	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
+		--bootstrap-server localhost:9092 \
+		--create --if-not-exists \
+		--topic $(IIDR_TOPIC) \
+		--partitions 1 \
+		--replication-factor 1
+	@echo "[INFO] Setting up MariaDB tables..."
+	kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"DROP TABLE IF EXISTS target_database.IIDR_TEST_ORDERS; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
+	@echo "[OK] IIDR test setup completed"
+
+iidr-register-v2:
+	@echo "[INFO] Registering IIDR CDC sink connector on Debezium 2.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test.json $(CURL_POD):/tmp/iidr_cdc_sink-test.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-test.json || echo "[ERROR] Failed to register IIDR sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector registered on 2.x"
+
+iidr-register-v3:
+	@echo "[INFO] Registering IIDR CDC sink connector on Debezium 3.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test.json $(CURL_POD):/tmp/iidr_cdc_sink-test.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-test.json || echo "[ERROR] Failed to register IIDR sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector registered on 3.x"
+
+iidr-run:
+	@echo "[INFO] Producing IIDR CDC test events..."
+	@echo "[INFO] Creating ConfigMap with producer script..."
+	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
+	kubectl create configmap iidr-producer-script -n $(NAMESPACE) --from-file=producer.py=hack/scripts/iidr-test-producer.py
+	@echo "[INFO] Running producer pod..."
+	kubectl run iidr-test-producer -n $(NAMESPACE) --rm -i --restart=Never \
+		--image=python:3.11-slim \
+		--overrides='{"spec":{"containers":[{"name":"iidr-test-producer","image":"python:3.11-slim","command":["bash","-c","pip install kafka-python -q && python3 /scripts/producer.py --bootstrap-server dbrep-kafka.$(NAMESPACE).svc.cluster.local:9092 --topic $(IIDR_TOPIC)"],"volumeMounts":[{"name":"script","mountPath":"/scripts"}]}],"volumes":[{"name":"script","configMap":{"name":"iidr-producer-script"}}]}}'
+	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
+	@echo "[INFO] Waiting 10s for events to be processed..."
+	@sleep 10
+	@echo "[OK] Test events produced"
+
+iidr-verify:
+	@echo "[INFO] Verifying IIDR CDC sink test results..."
+	@echo ""
+	@echo "[INFO] Target table (IIDR_TEST_ORDERS):"
+	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.IIDR_TEST_ORDERS ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+	@echo ""
+	@echo "[INFO] Corrupt events table (streaming_corrupt_events):"
+	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT id, topic, kafka_partition, kafka_offset, error_reason, table_name, entry_type, created_at FROM target_database.streaming_corrupt_events ORDER BY id;" 2>/dev/null || echo "Table not found or empty"
+	@echo ""
+	@echo "[INFO] Expected results:"
+	@echo "  - IIDR_TEST_ORDERS: 2 rows (ID=1 inserted, ID=2 updated, ID=3 deleted)"
+	@echo "  - streaming_corrupt_events: 1 row (missing A_ENTTYP header)"
+
+iidr-status-v2:
+	@echo "[INFO] Checking IIDR sink connector status on Debezium 2.x..."
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR)/status | jq .
+
+iidr-status-v3:
+	@echo "[INFO] Checking IIDR sink connector status on Debezium 3.x..."
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR)/status | jq .
+
+iidr-clean:
+	@echo "[INFO] Cleaning up IIDR CDC sink test..."
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR)
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR)
+	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"DROP TABLE IF EXISTS target_database.IIDR_TEST_ORDERS; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
+	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
+		--bootstrap-server localhost:9092 \
+		--delete --topic $(IIDR_TOPIC) 2>/dev/null || true
+	@echo "[OK] IIDR test cleanup completed"
 
 # =============================================================================
 # Utilities

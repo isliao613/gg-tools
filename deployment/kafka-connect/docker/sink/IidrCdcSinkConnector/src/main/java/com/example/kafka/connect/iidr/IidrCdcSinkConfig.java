@@ -33,8 +33,15 @@ public class IidrCdcSinkConfig extends AbstractConfig {
 
     // Corrupt Events Table
     public static final String CORRUPT_EVENTS_TABLE_CONFIG = "corrupt.events.table";
-    private static final String CORRUPT_EVENTS_TABLE_DOC = "Table name for corrupt/invalid events";
-    public static final String CORRUPT_EVENTS_TABLE_DEFAULT = "streaming_corrupt_events";
+    private static final String CORRUPT_EVENTS_TABLE_DOC = "Table name for corrupt/invalid events. " +
+            "Leave empty to disable corrupt event logging to database.";
+    public static final String CORRUPT_EVENTS_TABLE_DEFAULT = "";
+
+    // Error Tolerance
+    public static final String ERRORS_TOLERANCE_CONFIG = "errors.tolerance";
+    private static final String ERRORS_TOLERANCE_DOC = "Behavior when encountering corrupt events: " +
+            "'none' (fail the task), 'log' (log warning and skip), 'all' (silently skip)";
+    public static final String ERRORS_TOLERANCE_DEFAULT = "log";
 
     // Timezone Settings
     public static final String DEFAULT_TIMEZONE_CONFIG = "default.timezone";
@@ -87,7 +94,9 @@ public class IidrCdcSinkConfig extends AbstractConfig {
             .define(TABLE_NAME_FORMAT_CONFIG, Type.STRING, TABLE_NAME_FORMAT_DEFAULT,
                     Importance.MEDIUM, TABLE_NAME_FORMAT_DOC)
             .define(CORRUPT_EVENTS_TABLE_CONFIG, Type.STRING, CORRUPT_EVENTS_TABLE_DEFAULT,
-                    Importance.MEDIUM, CORRUPT_EVENTS_TABLE_DOC)
+                    Importance.LOW, CORRUPT_EVENTS_TABLE_DOC)
+            .define(ERRORS_TOLERANCE_CONFIG, Type.STRING, ERRORS_TOLERANCE_DEFAULT,
+                    Importance.MEDIUM, ERRORS_TOLERANCE_DOC)
             // Timezone
             .define(DEFAULT_TIMEZONE_CONFIG, Type.STRING, DEFAULT_TIMEZONE_DEFAULT,
                     Importance.MEDIUM, DEFAULT_TIMEZONE_DOC)
@@ -132,6 +141,23 @@ public class IidrCdcSinkConfig extends AbstractConfig {
 
     public String getCorruptEventsTable() {
         return getString(CORRUPT_EVENTS_TABLE_CONFIG);
+    }
+
+    public boolean isCorruptEventsTableEnabled() {
+        String table = getCorruptEventsTable();
+        return table != null && !table.trim().isEmpty();
+    }
+
+    public String getErrorsTolerance() {
+        return getString(ERRORS_TOLERANCE_CONFIG);
+    }
+
+    public boolean shouldFailOnError() {
+        return "none".equalsIgnoreCase(getErrorsTolerance());
+    }
+
+    public boolean shouldLogOnError() {
+        return "log".equalsIgnoreCase(getErrorsTolerance());
     }
 
     public String getDefaultTimezone() {

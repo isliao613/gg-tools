@@ -20,7 +20,7 @@ public class DialectFactory {
         String dbProductName = meta.getDatabaseProductName();
         log.info("Resolved database product name: " + dbProductName);
 
-        if ("MySQL".equalsIgnoreCase(dbProductName)) {
+        if ("MySQL".equalsIgnoreCase(dbProductName) || "MariaDB".equalsIgnoreCase(dbProductName)) {
             return new MySqlDialect();
         }
         if ("PostgreSQL".equalsIgnoreCase(dbProductName)) {

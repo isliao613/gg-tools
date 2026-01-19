@@ -213,6 +213,30 @@ make datatype-verify    # Verify data in MariaDB for datatype testing
 make datatype-clean     # Clean up connectors and tables for datatype testing
 ```
 
+### IIDR CDC Sink Connector Testing
+
+Test the custom IIDR (IBM InfoSphere Data Replication) CDC Sink Connector:
+
+```bash
+make iidr-all-v2        # Full IIDR CDC sink test with Debezium 2.x
+make iidr-all-v3        # Full IIDR CDC sink test with Debezium 3.x
+make iidr-all-dual      # Full IIDR CDC sink test with both 2.x and 3.x
+make iidr-setup         # Set up Kafka topic and MariaDB for IIDR testing
+make iidr-register-v2   # Register IIDR sink connector on Debezium 2.x
+make iidr-register-v3   # Register IIDR sink connector on Debezium 3.x
+make iidr-run           # Produce test IIDR CDC events to Kafka
+make iidr-verify        # Verify data in MariaDB for IIDR testing
+make iidr-status-v2     # Check IIDR sink connector status on 2.x
+make iidr-status-v3     # Check IIDR sink connector status on 3.x
+make iidr-clean         # Clean up IIDR test resources
+```
+
+The IIDR sink connector processes CDC events with IBM Journal Entry Type headers (`A_ENTTYP`) and writes to a target database. The test verifies:
+- INSERT operations (A_ENTTYP: PT, RR, PX, UR)
+- UPDATE operations (A_ENTTYP: UP, FI, FP)
+- DELETE operations (A_ENTTYP: DL, DR)
+- Corrupt event routing (missing headers)
+
 ### Utilities
 
 ```bash

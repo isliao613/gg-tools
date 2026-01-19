@@ -18,15 +18,15 @@ public class EntryTypeMapper {
     private static final Map<String, CdcOperation> ENTRY_TYPE_MAP = new HashMap<>();
 
     static {
-        // INSERT codes: PT, RR, PX
-        ENTRY_TYPE_MAP.put("PT", CdcOperation.INSERT);
-        ENTRY_TYPE_MAP.put("RR", CdcOperation.INSERT);
-        ENTRY_TYPE_MAP.put("PX", CdcOperation.INSERT);
+        // INSERT codes: PT, RR, PX - use UPSERT for idempotent replay
+        ENTRY_TYPE_MAP.put("PT", CdcOperation.UPSERT);
+        ENTRY_TYPE_MAP.put("RR", CdcOperation.UPSERT);
+        ENTRY_TYPE_MAP.put("PX", CdcOperation.UPSERT);
 
-        // UPDATE codes: UP, FI, FP
-        ENTRY_TYPE_MAP.put("UP", CdcOperation.UPDATE);
-        ENTRY_TYPE_MAP.put("FI", CdcOperation.UPDATE);
-        ENTRY_TYPE_MAP.put("FP", CdcOperation.UPDATE);
+        // UPDATE codes: UP, FI, FP - use UPSERT (full row image)
+        ENTRY_TYPE_MAP.put("UP", CdcOperation.UPSERT);
+        ENTRY_TYPE_MAP.put("FI", CdcOperation.UPSERT);
+        ENTRY_TYPE_MAP.put("FP", CdcOperation.UPSERT);
 
         // UR appears in both INSERT and UPDATE in spec - treat as UPSERT
         ENTRY_TYPE_MAP.put("UR", CdcOperation.UPSERT);

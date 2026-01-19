@@ -33,7 +33,7 @@ public class MySqlDialect extends GenericDialect {
     @Override
     public String getColumnType(org.apache.kafka.connect.data.Schema schema) {
         if (schema == null) {
-            return "TEXT";
+            return "VARCHAR(1024)";
         }
         switch (schema.type()) {
             case INT8:

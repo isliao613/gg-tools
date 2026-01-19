@@ -117,7 +117,7 @@ public class JdbcWriter implements AutoCloseable {
             return;
         }
 
-        String sql = dialect.buildUpdateSql(tableName, columns, pkColumns);
+        String sql = dialect.buildUpsertSql(tableName, columns, pkColumns);
         log.fine("UPDATE SQL: " + sql);
 
         try (PreparedStatement ps = connection.prepareStatement(sql)) {
@@ -280,7 +280,9 @@ public class JdbcWriter implements AutoCloseable {
     }
 
     private void createTable(String tableName, ProcessedRecord sample) throws SQLException {
-        String ddl = dialect.buildCreateTableSql(tableName, sample);
+        List<String> pkColumns = config.getPkFields();
+        String ddl = dialect.buildCreateTableSql(tableName, sample, pkColumns);
+        log.info("Creating table with DDL: " + ddl);
         try (Statement stmt = connection.createStatement()) {
             stmt.execute(ddl);
         }

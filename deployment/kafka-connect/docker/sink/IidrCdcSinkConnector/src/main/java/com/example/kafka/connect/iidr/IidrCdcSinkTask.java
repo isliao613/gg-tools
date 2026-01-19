@@ -60,11 +60,28 @@ public class IidrCdcSinkTask extends SinkTask {
 
             Dialect dialect = DialectFactory.create(connection);
             this.jdbcWriter = new JdbcWriter(connection, config, dialect);
-            this.corruptEventWriter = new CorruptEventWriter(
-                    connection,
-                    config.getCorruptEventsTable(),
-                    config.isAutoCreate()
-            );
+
+            // Initialize corrupt event writer only if enabled
+            if (config.isCorruptEventsTableEnabled()) {
+                this.corruptEventWriter = new CorruptEventWriter(
+                        connection,
+                        config.getCorruptEventsTable(),
+                        false
+                );
+
+                if (config.isAutoCreate()) {
+                    try (java.sql.Statement stmt = connection.createStatement()) {
+                        String sql = String.format("CREATE TABLE IF NOT EXISTS %s (id BIGINT AUTO_INCREMENT PRIMARY KEY, topic VARCHAR(255) NOT NULL, kafka_partition INT NOT NULL, kafka_offset BIGINT NOT NULL, record_key TEXT, record_value LONGTEXT, headers TEXT, error_reason VARCHAR(1000) NOT NULL, table_name VARCHAR(255), entry_type VARCHAR(10), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX idx_topic_partition_offset (topic, kafka_partition, kafka_offset), INDEX idx_table_name (table_name), INDEX idx_created_at (created_at))", config.getCorruptEventsTable());
+                        stmt.execute(sql);
+                        connection.commit();
+                    } catch (SQLException e) {
+                        log.warning("Failed to create corrupt events table: " + e.getMessage());
+                    }
+                }
+            }
+
+            log.info("IidrCdcSinkTask configuration: errors.tolerance=" + config.getErrorsTolerance() +
+                    ", corrupt.events.table=" + (config.isCorruptEventsTableEnabled() ? config.getCorruptEventsTable() : "disabled"));
 
             log.info("IidrCdcSinkTask started successfully");
 
@@ -109,9 +126,9 @@ public class IidrCdcSinkTask extends SinkTask {
                 jdbcWriter.write(entry.getKey(), entry.getValue());
             }
 
-            // Write corrupt records
+            // Handle corrupt records based on errors.tolerance
             if (!corruptRecords.isEmpty()) {
-                corruptEventWriter.write(corruptRecords);
+                handleCorruptRecords(corruptRecords);
             }
 
             // Commit transaction
@@ -192,6 +209,43 @@ public class IidrCdcSinkTask extends SinkTask {
         return format
                 .replace("${TableName}", tableName != null ? tableName : "")
                 .replace("${topic}", topic != null ? topic : "");
+    }
+
+    /**
+     * Handle corrupt records based on errors.tolerance configuration.
+     * - "none": fail the task
+     * - "log": log warning and skip
+     * - "all": silently skip
+     * If corrupt.events.table is configured, also write to that table.
+     */
+    private void handleCorruptRecords(List<CorruptRecord> corruptRecords) throws SQLException {
+        if (corruptRecords.isEmpty()) {
+            return;
+        }
+
+        // Write to corrupt events table if enabled
+        if (config.isCorruptEventsTableEnabled() && corruptEventWriter != null) {
+            corruptEventWriter.write(corruptRecords);
+        }
+
+        // Handle based on errors.tolerance setting
+        if (config.shouldFailOnError()) {
+            // errors.tolerance = none: fail the task
+            StringBuilder errorMsg = new StringBuilder("Encountered " + corruptRecords.size() + " corrupt records:\n");
+            for (CorruptRecord cr : corruptRecords) {
+                errorMsg.append("  - ").append(cr.getReason()).append("\n");
+            }
+            throw new RuntimeException(errorMsg.toString());
+        } else if (config.shouldLogOnError()) {
+            // errors.tolerance = log: log warning and continue
+            for (CorruptRecord cr : corruptRecords) {
+                log.warning("Corrupt record skipped: " + cr.getReason() +
+                        " (topic=" + cr.getRecord().topic() +
+                        ", partition=" + cr.getRecord().kafkaPartition() +
+                        ", offset=" + cr.getRecord().kafkaOffset() + ")");
+            }
+        }
+        // errors.tolerance = all: silently skip (do nothing)
     }
 
     @Override
