@@ -205,6 +205,11 @@ make clean && make base-infra-up && make build-all
 | Connector FAILED | Check logs, verify database connectivity |
 | No data replicating | Check connector status, verify topic exists |
 | PostgreSQL type errors | Ensure latest connector image is deployed |
+| VariableScaleDecimal mapping error | Use `decimal.handling.mode: "double"` or add `"legacy.decimal.handling.strategy": "true"` for Debezium 3.x |
+
+> **Note**: Debezium 3.x changed decimal handling behavior. If you encounter `VariableScaleDecimal` type mapping errors with JDBC sink, either:
+> - Set `"decimal.handling.mode": "double"` (may lose precision for large numbers)
+> - Set `"decimal.handling.mode": "string"` with `"legacy.decimal.handling.strategy": "true"` (Debezium 3.x only)
 
 ## Documentation
 
