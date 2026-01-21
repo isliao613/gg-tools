@@ -1,0 +1,140 @@
+# Makefile.datatype
+#
+# Datatype testing for Oracle CDC to MariaDB replication.
+# Tests various Oracle data types and their mapping to MariaDB.
+# Can be run independently: make -f Makefile.datatype <target>
+#
+# Prerequisites:
+#   - Infrastructure deployed (make -f Makefile.common base-infra-up)
+#   - Kafka Connect images built (make -f Makefile.docker build-v2/v3)
+#
+# ==============================================================================
+
+.DEFAULT_GOAL := help
+
+include Makefile.param
+
+# =============================================================================
+# Phony Targets
+# =============================================================================
+
+.PHONY: help all-v2 all-v3 all-dual \
+	setup register-v2 register-v3 verify clean
+
+# =============================================================================
+# Help
+# =============================================================================
+
+help:
+	@echo "Usage: make -f Makefile.datatype [target]"
+	@echo ""
+	@echo "Full Workflows:"
+	@echo "  all-v2               - Full datatype test with Debezium 2.x"
+	@echo "  all-v3               - Full datatype test with Debezium 3.x"
+	@echo "  all-dual             - Full datatype test with both 2.x and 3.x"
+	@echo ""
+	@echo "Individual Steps:"
+	@echo "  setup                - Set up Oracle and MariaDB for datatype testing"
+	@echo "  register-v2          - Register Debezium 2.x connectors"
+	@echo "  register-v3          - Register Debezium 3.x connectors"
+	@echo "  verify               - Verify data in MariaDB"
+	@echo "  clean                - Clean up connectors and tables"
+
+# =============================================================================
+# Full Workflows
+# =============================================================================
+
+all-v2: setup register-v2 verify
+	@echo "[OK] Full datatype test with Debezium 2.x completed!"
+
+all-v3: setup register-v3 verify
+	@echo "[OK] Full datatype test with Debezium 3.x completed!"
+
+all-dual: setup register-v2 register-v3 verify
+	@echo "[OK] Full datatype test with Debezium 2.x and 3.x completed!"
+
+# =============================================================================
+# Setup
+# =============================================================================
+
+setup:
+	@echo "[INFO] Setting up Oracle and MariaDB for datatype testing..."
+	@echo "[INFO] Setting up Oracle..."
+	kubectl cp hack/sql/oracle-datatype-test.sql $(ORACLE_POD):/tmp/oracle-datatype-test.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba @/tmp/oracle-datatype-test.sql
+	@echo "[INFO] Setting up MariaDB..."
+	kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;"
+	@echo "[OK] Datatype setup completed"
+
+# =============================================================================
+# Connector Registration
+# =============================================================================
+
+register-v2:
+	@echo "[INFO] Registering Debezium 2.x connectors for datatype testing..."
+	kubectl cp hack/source-debezium/oracle-datatype-test-2x.json $(CURL_POD):/tmp/source-connector-datatype-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-datatype-2x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-datatype-2x.json $(CURL_POD):/tmp/sink-connector-datatype-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-datatype-2x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[OK] Debezium 2.x connectors registered"
+
+register-v3:
+	@echo "[INFO] Registering Debezium 3.x connectors for datatype testing..."
+	kubectl cp hack/source-debezium/oracle-datatype-test-3x.json $(CURL_POD):/tmp/source-connector-datatype-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/source-connector-datatype-3x.json || echo "[ERROR] Failed to register source connector"
+	@echo "[INFO] Waiting 30s for initial snapshot..."
+	@sleep 30
+	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-datatype-3x.json $(CURL_POD):/tmp/sink-connector-datatype-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/sink-connector-datatype-3x.json || echo "[ERROR] Failed to register sink connector"
+	@echo "[INFO] Waiting 10s for sync..."
+	@sleep 10
+	@echo "[OK] Debezium 3.x connectors registered"
+
+# =============================================================================
+# Verification
+# =============================================================================
+
+verify:
+	@echo "[INFO] Verifying data in MariaDB for datatype testing..."
+	@echo "[INFO] Debezium 2.x data:"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.datatype_test_v2 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+	@echo "[INFO] Debezium 3.x data:"
+	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.datatype_test_v3 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+clean:
+	@echo "[INFO] Cleaning up datatype testing connectors and tables..."
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/source_cdc_oracle_datatype_v2
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/sink_cdc_oracle_datatype_v2
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/source_cdc_oracle_datatype_v3
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/sink_cdc_oracle_datatype_v3
+	-printf 'DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;\nEXIT;\n' | kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
+	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) \
+		-e "DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;"
+	@echo "[OK] Datatype cleanup completed"

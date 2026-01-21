@@ -1,0 +1,27 @@
+# PostgreSQL deployment values
+# Override values for the postgresql chart dependency
+
+postgresql:
+  image:
+    registry: docker.io
+    repository: bitnami/postgresql
+    tag: latest
+  auth:
+    postgresPassword: "postgres_password"
+    username: "dbuser"
+    password: "dbuser_password"
+    database: "target_database"
+
+  architecture: standalone
+
+  primary:
+    persistence:
+      enabled: true
+      size: 1Gi
+    resources:
+      requests:
+        memory: 256Mi
+        cpu: 100m
+      limits:
+        memory: 512Mi
+        cpu: 500m

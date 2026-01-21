@@ -66,4 +66,34 @@ public class PostgreSqlDialect extends GenericDialect {
                 return "TEXT";
         }
     }
+
+    @Override
+    protected String inferColumnType(Object value) {
+        if (value == null) {
+            return "TEXT";
+        }
+        if (value instanceof Integer || value instanceof Long) {
+            return "BIGINT";
+        }
+        if (value instanceof Double || value instanceof Float) {
+            return "DOUBLE PRECISION";
+        }
+        if (value instanceof Boolean) {
+            return "BOOLEAN";
+        }
+        if (value instanceof String) {
+            String str = (String) value;
+            if (str.length() > 255) {
+                return "TEXT";
+            }
+            return "VARCHAR(1024)";
+        }
+        return "TEXT";
+    }
+
+    @Override
+    public String normalizeIdentifierForMetadata(String identifier) {
+        // PostgreSQL stores unquoted identifiers in lowercase
+        return identifier != null ? identifier.toLowerCase() : null;
+    }
 }

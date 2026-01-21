@@ -1,404 +1,266 @@
 # Makefile
+#
+# Main aggregator Makefile that delegates to sub-Makefiles.
+# This provides a unified interface for all operations.
+#
+# Each sub-Makefile can also be run independently:
+#   make -f Makefile.common <target>   # Infrastructure and utilities
+#   make -f Makefile.docker <target>   # Docker image builds
+#   make -f Makefile.e2e <target>      # E2E testing
+#   make -f Makefile.datatype <target> # Datatype testing
+#   make -f Makefile.iidr <target>     # IIDR CDC sink testing
+#
+# ==============================================================================
 
 .DEFAULT_GOAL := help
 
+# Include shared parameters for display in help
 include Makefile.param
-include Makefile.docker
-include Makefile.e2e
 
 # =============================================================================
-# Phony Targets
+# Help
 # =============================================================================
 
-.PHONY: help all-v2 all-v3 all-dual clean \
-	base-infra-up .check-tools .tools \
-	build-v2 build-v3 build-all \
-	test test-setup test-run test-verify test-clean test-clean-v2 test-clean-v3 \
-	setup-oracle setup-mariadb \
-	register-v2 register-v3 verify-v2 verify-v3 \
-	datatype-all-v2 datatype-all-v3 datatype-all-dual datatype-setup \
-	datatype-register-v2 datatype-register-v3 datatype-verify datatype-clean \
-	iidr-all-v2 iidr-all-v3 iidr-all-dual iidr-setup iidr-register-v2 iidr-register-v3 \
-	iidr-run iidr-verify iidr-status-v2 iidr-status-v3 iidr-clean \
-	logs-v2 logs-v3 status-v2 status-v3 port-forward
-
+.PHONY: help
 help:
+	@echo "Kafka DBSync - CDC Testing Framework"
+	@echo "====================================="
+	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
-	@echo "Main Workflows:"
-	@echo "  all-v2               - Full E2E pipeline with Debezium 2.x (base-infra-up, build-v2, test-setup, register-v2, verify-v2)"
-	@echo "  all-v3               - Full E2E pipeline with Debezium 3.x (base-infra-up, build-v3, test-setup, register-v3, verify-v3)"
-	@echo "  all-dual             - Full E2E pipeline with BOTH Debezium 2.x and 3.x"
+	@echo "You can also run each Makefile independently:"
+	@echo "  make -f Makefile.common help    # Infrastructure and utilities"
+	@echo "  make -f Makefile.docker help    # Docker image builds"
+	@echo "  make -f Makefile.e2e help       # E2E testing"
+	@echo "  make -f Makefile.datatype help  # Datatype testing"
+	@echo "  make -f Makefile.iidr help      # IIDR CDC sink testing"
 	@echo ""
-	@echo "Infrastructure Management:"
+	@echo "=== Infrastructure (Makefile.common) ==="
 	@echo "  base-infra-up        - Create Kind cluster and deploy base services"
 	@echo "  clean                - Delete Kind cluster and all services"
+	@echo "  .tools               - Install required tools (kubectl, helm, kind)"
+	@echo "  setup-oracle         - Set up Oracle XE 21c for CDC"
+	@echo "  setup-mariadb        - Set up MariaDB target database"
+	@echo "  setup-postgres       - Set up PostgreSQL target database"
+	@echo "  logs-v2/logs-v3      - View Kafka Connect logs"
+	@echo "  status-v2/status-v3  - Check connector status"
+	@echo "  port-forward         - Set up port forwarding"
 	@echo ""
-	@echo "E2E Testing:"
-	@echo "  test-setup           - Set up the databases for testing"
-	@echo "  test-run             - Run the CDC tests (insert, update, delete)"
-	@echo "  test-verify          - Verify data in both v2 and v3 target tables"
-	@echo "  test-clean           - Clean up connectors and tables (both versions)"
-	@echo "  test-clean-v2        - Clean up Debezium 2.x connectors only"
-	@echo "  test-clean-v3        - Clean up Debezium 3.x connectors only"
+	@echo "=== Docker Builds (Makefile.docker) ==="
+	@echo "  build-v2             - Build Kafka Connect with Debezium 2.x"
+	@echo "  build-v3             - Build Kafka Connect with Debezium 3.x"
+	@echo "  build-all            - Build both Debezium 2.x and 3.x"
 	@echo ""
-	@echo "Datatype Testing:"
+	@echo "=== E2E Testing (Makefile.e2e) ==="
+	@echo "  e2e-all-v2           - Full E2E pipeline with Debezium 2.x"
+	@echo "  e2e-all-v3           - Full E2E pipeline with Debezium 3.x"
+	@echo "  e2e-all-dual         - Full E2E pipeline with both versions"
+	@echo "  e2e-setup            - Set up databases for testing"
+	@echo "  e2e-run              - Run CDC tests (insert, update, delete)"
+	@echo "  e2e-verify           - Verify data in target tables"
+	@echo "  e2e-clean            - Clean up connectors and tables"
+	@echo "  e2e-register-v2/v3   - Register connectors"
+	@echo ""
+	@echo "=== Datatype Testing (Makefile.datatype) ==="
 	@echo "  datatype-all-v2      - Full datatype test with Debezium 2.x"
 	@echo "  datatype-all-v3      - Full datatype test with Debezium 3.x"
-	@echo "  datatype-all-dual    - Full datatype test with both 2.x and 3.x"
+	@echo "  datatype-all-dual    - Full datatype test with both versions"
 	@echo "  datatype-setup       - Set up Oracle and MariaDB for datatype testing"
-	@echo "  datatype-register-v2 - Register Debezium 2.x connectors for datatype testing"
-	@echo "  datatype-register-v3 - Register Debezium 3.x connectors for datatype testing"
-	@echo "  datatype-verify      - Verify data in MariaDB for datatype testing"
-	@echo "  datatype-clean       - Clean up connectors and tables for datatype testing"
+	@echo "  datatype-register-v2 - Register Debezium 2.x connectors"
+	@echo "  datatype-register-v3 - Register Debezium 3.x connectors"
+	@echo "  datatype-verify      - Verify data in MariaDB"
+	@echo "  datatype-clean       - Clean up connectors and tables"
 	@echo ""
-	@echo "IIDR CDC Sink Testing:"
-	@echo "  iidr-all-v2          - Full IIDR CDC sink test with Debezium 2.x"
-	@echo "  iidr-all-v3          - Full IIDR CDC sink test with Debezium 3.x"
-	@echo "  iidr-all-dual        - Full IIDR CDC sink test with both 2.x and 3.x"
-	@echo "  iidr-setup           - Set up Kafka topic and MariaDB for IIDR testing"
-	@echo "  iidr-register-v2     - Register IIDR sink connector on Debezium 2.x"
-	@echo "  iidr-register-v3     - Register IIDR sink connector on Debezium 3.x"
-	@echo "  iidr-run             - Produce test IIDR CDC events to Kafka"
-	@echo "  iidr-verify          - Verify data in MariaDB for IIDR testing"
-	@echo "  iidr-status-v2       - Check IIDR sink connector status on 2.x"
-	@echo "  iidr-status-v3       - Check IIDR sink connector status on 3.x"
+	@echo "=== IIDR CDC Sink Testing (Makefile.iidr) ==="
+	@echo "  iidr-all-v2          - Full IIDR test with Debezium 2.x"
+	@echo "  iidr-all-v3          - Full IIDR test with Debezium 3.x"
+	@echo "  iidr-all-dual        - Full IIDR test with both versions"
+	@echo "  iidr-setup           - Set up Kafka topic and databases"
+	@echo "  iidr-register-v2/v3  - Register IIDR MariaDB sink connectors"
+	@echo "  iidr-register-pg-v2  - Register IIDR PostgreSQL sink on 2.x"
+	@echo "  iidr-register-pg-v3  - Register IIDR PostgreSQL sink on 3.x"
+	@echo "  iidr-run             - Produce test IIDR CDC events"
+	@echo "  iidr-verify          - Verify data in MariaDB and PostgreSQL"
+	@echo "  iidr-status-v2/v3    - Check IIDR connector status"
 	@echo "  iidr-clean           - Clean up IIDR test resources"
-	@echo ""
-	@echo "Utilities:"
-	@echo "  logs-v2              - View logs of Debezium 2.x Kafka Connect"
-	@echo "  logs-v3              - View logs of Debezium 3.x Kafka Connect"
-	@echo "  status-v2            - Check connector status on Debezium 2.x"
-	@echo "  status-v3            - Check connector status on Debezium 3.x"
-	@echo "  port-forward         - Set up port forwarding"
 	@echo ""
 	@echo "Dual Kafka Connect Services:"
 	@echo "  Debezium 2.x: $(KAFKA_CONNECT_2X_SVC):8083"
 	@echo "  Debezium 3.x: $(KAFKA_CONNECT_3X_SVC):8083"
 
 # =============================================================================
-# Main Workflows
+# Infrastructure (Makefile.common)
 # =============================================================================
 
-all-v2: base-infra-up build-v2 test-setup register-v2 verify-v2
-	@echo "[OK] Full E2E pipeline with Debezium 2.x completed!"
+.PHONY: base-infra-up clean .tools .check-tools setup-oracle setup-mariadb setup-postgres \
+	logs-v2 logs-v3 status-v2 status-v3 port-forward
 
-all-v3: base-infra-up build-v3 test-setup register-v3 verify-v3
-	@echo "[OK] Full E2E pipeline with Debezium 3.x completed!"
-
-all-dual: base-infra-up build-all test-setup register-v2 verify-v2 register-v3 verify-v3
-	@echo "[OK] Full E2E pipeline with Debezium 2.x and 3.x completed!"
-
-# =============================================================================
-# Infrastructure Management
-# =============================================================================
-
-base-infra-up: .check-tools
-	@echo "Creating Kind cluster and deploying services (dual Kafka Connect)..."
-	@if kind get clusters 2>/dev/null | grep -q "^$(CLUSTER_NAME)$$"; then \
-		echo "Cluster '$(CLUSTER_NAME)' already exists"; \
-	else \
-		kind create cluster --name $(CLUSTER_NAME) --config hack/kind-config.yaml; \
-	fi
-	@kubectl cluster-info --context kind-$(CLUSTER_NAME)
-	@echo "[OK] Cluster created"
-	@echo "[INFO] Creating namespace '$(NAMESPACE)'..."
-	-kubectl create ns $(NAMESPACE)
-	kubectl config set-context --current --namespace $(NAMESPACE)
-	@echo "[INFO] Deploying services..."
-	docker pull public.ecr.aws/bitnami/kafka:3.9.0-debian-12-r4
-	kind load docker-image public.ecr.aws/bitnami/kafka:3.9.0-debian-12-r4 --name $(CLUSTER_NAME)
-	helm repo add bitnami https://charts.bitnami.com/bitnami
-	helm dependency build deployment/kafka
-	helm upgrade --install dbrep-kafka deployment/kafka -f deployment/kafka/values-kraft.yaml -n $(NAMESPACE)
-	helm dependency build deployment/redpanda-console
-	helm upgrade --install dbrep-redpanda-console deployment/redpanda-console -f deployment/redpanda-console/values.yaml -n $(NAMESPACE)
-	helm dependency build deployment/mariadb
-	helm upgrade --install dbrep-mariadb deployment/mariadb -f deployment/mariadb/values.yaml -n $(NAMESPACE)
-	-kubectl delete -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) 2>/dev/null || true
-	kubectl apply -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE)
-	helm dependency build deployment/mssql
-	helm upgrade --install dbrep-mssql deployment/mssql -f deployment/mssql/values.yaml -n $(NAMESPACE)
-	@echo "[INFO] Deploying Oracle XE 21c..."
-	kubectl apply -f deployment/oracle/oracle-free.yaml -n $(NAMESPACE)
-	helm dependency build deployment/curl-client
-	helm upgrade --install dbrep-curl-client deployment/curl-client -f deployment/curl-client/values.yaml -n $(NAMESPACE)
-	@echo "[OK] All services deployed (Debezium 2.x + 3.x)"
-	@echo "[INFO] Waiting for pods to be ready..."
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kafka --timeout=300s -n $(NAMESPACE)
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=mariadb --timeout=300s -n $(NAMESPACE)
-	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=curl-client --timeout=120s -n $(NAMESPACE)
-	kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=300s -n $(NAMESPACE)
-	@echo "[OK] All pods ready"
+base-infra-up:
+	@$(MAKE) -f Makefile.common base-infra-up
 
 clean:
-	@echo "Deleting Kind cluster and services..."
-	-kind delete cluster --name $(CLUSTER_NAME)
-	@echo "[INFO] Waiting 10s for cluster to be deleted..."
-	sleep 10
-	-kubectl delete -f deployment/oracle/oracle-free.yaml -n $(NAMESPACE) || true
-	-helm uninstall dbrep-mssql -n $(NAMESPACE) || true
-	-kubectl delete -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) || true
-	-helm uninstall dbrep-mariadb -n $(NAMESPACE) || true
-	-helm uninstall dbrep-redpanda-console -n $(NAMESPACE) || true
-	-helm uninstall dbrep-kafka-connect-ui -n $(NAMESPACE) || true
-	-helm uninstall dbrep-kafka-connect -n $(NAMESPACE) || true
-	-helm uninstall dbrep-kafka-connect-v3 -n $(NAMESPACE) || true
-	-helm uninstall dbrep-kafka -n $(NAMESPACE) || true
-	-helm uninstall dbrep-curl-client -n $(NAMESPACE) || true
-	-kubectl delete pvc --all -n $(NAMESPACE) || true
-	@echo "[OK] All services and PVCs deleted"
-
-.check-tools:
-	@command -v kubectl >/dev/null 2>&1 || { echo "[ERROR] kubectl not found. Run 'make .tools' first."; exit 1; }
-	@command -v helm >/dev/null 2>&1 || { echo "[ERROR] helm not found. Run 'make .tools' first."; exit 1; }
-	@command -v kind >/dev/null 2>&1 || { echo "[ERROR] kind not found. Run 'make .tools' first."; exit 1; }
+	@$(MAKE) -f Makefile.common clean
 
 .tools:
-	@echo "[INFO] Installing kubectl..."
-	@if ! command -v kubectl >/dev/null 2>&1; then \
-		curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl" && \
-		chmod +x kubectl && \
-		sudo mv kubectl /usr/local/bin/; \
-	else \
-		echo "kubectl already installed"; \
-	fi
-	@echo "[INFO] Installing helm..."
-	@if ! command -v helm >/dev/null 2>&1; then \
-		curl -sLo helm.tar.gz "https://get.helm.sh/helm-v3.13.0-linux-amd64.tar.gz" && \
-		tar -zxf helm.tar.gz linux-amd64/helm --strip-components 1 && \
-		sudo mv helm /usr/local/bin/ && \
-		rm helm.tar.gz; \
-	else \
-		echo "helm already installed"; \
-	fi
-	@echo "[INFO] Installing kind..."
-	@if ! command -v kind >/dev/null 2>&1; then \
-		curl -sLo kind "https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64" && \
-		chmod +x kind && \
-		sudo mv kind /usr/local/bin/; \
-	else \
-		echo "kind already installed"; \
-	fi
-	@echo "[OK] Tools installed"
+	@$(MAKE) -f Makefile.common .tools
 
-# =============================================================================
-# Datatype Testing
-# =============================================================================
+.check-tools:
+	@$(MAKE) -f Makefile.common .check-tools
 
-datatype-all-v2: base-infra-up build-v2 datatype-setup datatype-register-v2 datatype-verify
-	@echo "[OK] Full datatype test with Debezium 2.x completed!"
+setup-oracle:
+	@$(MAKE) -f Makefile.common setup-oracle
 
-datatype-all-v3: base-infra-up build-v3 datatype-setup datatype-register-v3 datatype-verify
-	@echo "[OK] Full datatype test with Debezium 3.x completed!"
+setup-mariadb:
+	@$(MAKE) -f Makefile.common setup-mariadb
 
-datatype-all-dual: base-infra-up build-v2 build-v3 datatype-setup datatype-register-v2 datatype-register-v3 datatype-verify
-	@echo "[OK] Full datatype test with Debezium 2.x and 3.x completed!"
-
-datatype-setup:
-	@echo "[INFO] Setting up Oracle and MariaDB for datatype testing..."
-	@echo "[INFO] Setting up Oracle..."
-	kubectl cp hack/sql/oracle-datatype-test.sql $(ORACLE_POD):/tmp/oracle-datatype-test.sql -n $(NAMESPACE)
-	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba @/tmp/oracle-datatype-test.sql
-	@echo "[INFO] Setting up MariaDB..."
-	kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;"
-	@echo "[OK] Datatype setup completed"
-
-datatype-register-v2:
-	@echo "[INFO] Registering Debezium 2.x connectors for datatype testing..."
-	kubectl cp hack/source-debezium/oracle-datatype-test-2x.json $(CURL_POD):/tmp/source-connector-datatype-2x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/source-connector-datatype-2x.json || echo "[ERROR] Failed to register source connector"
-	@echo "[INFO] Waiting 30s for initial snapshot..."
-	@sleep 30
-	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-datatype-2x.json $(CURL_POD):/tmp/sink-connector-datatype-2x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/sink-connector-datatype-2x.json || echo "[ERROR] Failed to register sink connector"
-	@echo "[INFO] Waiting 10s for sync..."
-	@sleep 10
-	@echo "[OK] Debezium 2.x connectors registered"
-
-datatype-register-v3:
-	@echo "[INFO] Registering Debezium 3.x connectors for datatype testing..."
-	kubectl cp hack/source-debezium/oracle-datatype-test-3x.json $(CURL_POD):/tmp/source-connector-datatype-3x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/source-connector-datatype-3x.json || echo "[ERROR] Failed to register source connector"
-	@echo "[INFO] Waiting 30s for initial snapshot..."
-	@sleep 30
-	kubectl cp hack/sink-jdbc/cdc_oracle_mariadb-datatype-3x.json $(CURL_POD):/tmp/sink-connector-datatype-3x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/sink-connector-datatype-3x.json || echo "[ERROR] Failed to register sink connector"
-	@echo "[INFO] Waiting 10s for sync..."
-	@sleep 10
-	@echo "[OK] Debezium 3.x connectors registered"
-
-datatype-verify:
-	@echo "[INFO] Verifying data in MariaDB for datatype testing..."
-	@echo "[INFO] Debezium 2.x data:"
-	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"SELECT * FROM target_database.datatype_test_v2 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
-	@echo "[INFO] Debezium 3.x data:"
-	@kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"SELECT * FROM target_database.datatype_test_v3 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
-
-datatype-clean:
-	@echo "[INFO] Cleaning up datatype testing connectors and tables..."
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/source_cdc_oracle_datatype_v2
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/sink_cdc_oracle_datatype_v2
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/source_cdc_oracle_datatype_v3
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/sink_cdc_oracle_datatype_v3
-	@echo "DROP TABLE DEMO.DATATYPE_TEST; EXIT;" \
-		| kubectl exec -i $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba
-	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) \
-		-e "DROP TABLE IF EXISTS target_database.datatype_test_v2; DROP TABLE IF EXISTS target_database.datatype_test_v3;"
-	@echo "[OK] Datatype cleanup completed"
-
-# =============================================================================
-# IIDR CDC Sink Testing
-# =============================================================================
-
-IIDR_TOPIC := iidr.CDC.TEST_ORDERS
-IIDR_CONNECTOR := iidr_cdc_sink_test
-
-iidr-all-v2: base-infra-up build-v2 iidr-setup setup-mariadb iidr-register-v2 iidr-run iidr-verify
-	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x completed!"
-
-iidr-all-v3: base-infra-up build-v3 iidr-setup setup-mariadb iidr-register-v3 iidr-run iidr-verify
-	@echo "[OK] Full IIDR CDC sink test with Debezium 3.x completed!"
-
-iidr-all-dual: base-infra-up build-v2 build-v3 setup-mariadb iidr-setup iidr-register-v2 iidr-register-v3 iidr-run iidr-verify
-	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x and 3.x completed!"
-
-iidr-setup:
-	@echo "[INFO] Setting up IIDR CDC sink test environment..."
-	@echo "[INFO] Creating Kafka topic: $(IIDR_TOPIC)..."
-	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
-		--bootstrap-server localhost:9092 \
-		--create --if-not-exists \
-		--topic $(IIDR_TOPIC) \
-		--partitions 1 \
-		--replication-factor 1
-	@echo "[INFO] Setting up MariaDB tables..."
-	kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"DROP TABLE IF EXISTS target_database.TEST_ORDERS_v2; DROP TABLE IF EXISTS target_database.TEST_ORDERS_v3; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
-	@echo "[OK] IIDR test setup completed"
-
-iidr-register-v2:
-	@echo "[INFO] Registering IIDR CDC sink connector on Debezium 2.x..."
-	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test-2x.json $(CURL_POD):/tmp/iidr_cdc_sink-test-2x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/iidr_cdc_sink-test-2x.json || echo "[ERROR] Failed to register IIDR sink connector"
-	@echo "[INFO] Waiting 5s for connector to start..."
-	@sleep 5
-	@echo "[OK] IIDR CDC sink connector registered on 2.x"
-
-iidr-register-v3:
-	@echo "[INFO] Registering IIDR CDC sink connector on Debezium 3.x..."
-	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test-3x.json $(CURL_POD):/tmp/iidr_cdc_sink-test-3x.json -n $(NAMESPACE)
-	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
-		-H "Content-Type: application/json" \
-		-d @/tmp/iidr_cdc_sink-test-3x.json || echo "[ERROR] Failed to register IIDR sink connector"
-	@echo "[INFO] Waiting 5s for connector to start..."
-	@sleep 5
-	@echo "[OK] IIDR CDC sink connector registered on 3.x"
-
-iidr-run:
-	@echo "[INFO] Producing IIDR CDC test events..."
-	@echo "[INFO] Creating ConfigMap with producer script..."
-	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
-	kubectl create configmap iidr-producer-script -n $(NAMESPACE) --from-file=producer.py=hack/scripts/iidr-test-producer.py
-	@echo "[INFO] Running producer pod..."
-	kubectl run iidr-test-producer -n $(NAMESPACE) --rm -i --restart=Never \
-		--image=python:3.11-slim \
-		--overrides='{"spec":{"containers":[{"name":"iidr-test-producer","image":"python:3.11-slim","command":["bash","-c","pip install kafka-python -q && python3 /scripts/producer.py --bootstrap-server dbrep-kafka.$(NAMESPACE).svc.cluster.local:9092 --topic $(IIDR_TOPIC)"],"volumeMounts":[{"name":"script","mountPath":"/scripts"}]}],"volumes":[{"name":"script","configMap":{"name":"iidr-producer-script"}}]}}'
-	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
-	@echo "[INFO] Waiting 10s for events to be processed..."
-	@sleep 10
-	@echo "[OK] Test events produced"
-
-iidr-verify:
-	@echo "[INFO] Verifying IIDR CDC sink test results..."
-	@echo ""
-	@echo "[INFO] Target table (IIDR_TEST_ORDERS):"
-	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"SELECT * FROM target_database.IIDR_TEST_ORDERS ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
-	@echo ""
-	@echo "[INFO] Corrupt events table (streaming_corrupt_events):"
-	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"SELECT id, topic, kafka_partition, kafka_offset, error_reason, table_name, entry_type, created_at FROM target_database.streaming_corrupt_events ORDER BY id;" 2>/dev/null || echo "Table not found or empty"
-	@echo ""
-	@echo "[INFO] Expected results:"
-	@echo "  - IIDR_TEST_ORDERS: 2 rows (ID=1 inserted, ID=2 updated, ID=3 deleted)"
-	@echo "  - streaming_corrupt_events: 1 row (missing A_ENTTYP header)"
-
-iidr-status-v2:
-	@echo "[INFO] Checking IIDR sink connector status on Debezium 2.x..."
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR)/status | jq .
-
-iidr-status-v3:
-	@echo "[INFO] Checking IIDR sink connector status on Debezium 3.x..."
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR)/status | jq .
-
-iidr-clean:
-	@echo "[INFO] Cleaning up IIDR CDC sink test..."
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR)
-	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
-		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR)
-	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
-		"DROP TABLE IF EXISTS target_database.IIDR_TEST_ORDERS; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
-	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
-		--bootstrap-server localhost:9092 \
-		--delete --topic $(IIDR_TOPIC) 2>/dev/null || true
-	@echo "[OK] IIDR test cleanup completed"
-
-# =============================================================================
-# Utilities
-# =============================================================================
+setup-postgres:
+	@$(MAKE) -f Makefile.common setup-postgres
 
 logs-v2:
-	@echo "Viewing Kafka Connect logs (Debezium 2.x)..."
-	kubectl logs -f deployment/$(KAFKA_CONNECT_2X_SVC) --tail=100 -n $(NAMESPACE)
+	@$(MAKE) -f Makefile.common logs-v2
 
 logs-v3:
-	@echo "Viewing Kafka Connect logs (Debezium 3.x)..."
-	kubectl logs -f deployment/$(KAFKA_CONNECT_3X_SVC) --tail=100 -n $(NAMESPACE)
+	@$(MAKE) -f Makefile.common logs-v3
 
 status-v2:
-	@echo "[INFO] Checking connector status on Debezium 2.x..."
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors | jq .
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s "http://$(KAFKA_CONNECT_2X_SVC):8083/connectors?expand=status" | jq .
+	@$(MAKE) -f Makefile.common status-v2
 
 status-v3:
-	@echo "[INFO] Checking connector status on Debezium 3.x..."
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors | jq .
-	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s "http://$(KAFKA_CONNECT_3X_SVC):8083/connectors?expand=status" | jq .
+	@$(MAKE) -f Makefile.common status-v3
 
 port-forward:
-	@echo "Setting up port forwarding..."
-	@echo "Kafka Connect UI: http://localhost:8000"
-	@echo "Redpanda Console: http://localhost:8080"
-	@echo "Kafka Connect 2.x API: http://localhost:8083"
-	@echo "Kafka Connect 3.x API: http://localhost:8084"
-	kubectl port-forward svc/dbrep-kafka-connect-ui 8000:80 -n $(NAMESPACE) &
-	kubectl port-forward svc/dbrep-redpanda-console 8080:8080 -n $(NAMESPACE) &
-	kubectl port-forward svc/$(KAFKA_CONNECT_2X_SVC) 8083:8083 -n $(NAMESPACE) &
-	kubectl port-forward svc/$(KAFKA_CONNECT_3X_SVC) 8084:8083 -n $(NAMESPACE) &
-	@echo "[INFO] Port forwarding started in background. Press Ctrl+C to stop all."
-	wait
+	@$(MAKE) -f Makefile.common port-forward
+
+# =============================================================================
+# Docker Builds (Makefile.docker)
+# =============================================================================
+
+.PHONY: build-v2 build-v3 build-all
+
+build-v2:
+	@$(MAKE) -f Makefile.docker build-v2
+
+build-v3:
+	@$(MAKE) -f Makefile.docker build-v3
+
+build-all:
+	@$(MAKE) -f Makefile.docker build-all
+
+# =============================================================================
+# E2E Testing (Makefile.e2e)
+# =============================================================================
+
+.PHONY: e2e-all-v2 e2e-all-v3 e2e-all-dual \
+	e2e-setup e2e-run e2e-verify e2e-clean e2e-clean-v2 e2e-clean-v3 \
+	e2e-register-v2 e2e-register-v3
+
+e2e-all-v2:
+	@$(MAKE) -f Makefile.e2e all-v2
+
+e2e-all-v3:
+	@$(MAKE) -f Makefile.e2e all-v3
+
+e2e-all-dual:
+	@$(MAKE) -f Makefile.e2e all-dual
+
+e2e-setup:
+	@$(MAKE) -f Makefile.e2e test-setup
+
+e2e-run:
+	@$(MAKE) -f Makefile.e2e test-run
+
+e2e-verify:
+	@$(MAKE) -f Makefile.e2e test-verify
+
+e2e-clean:
+	@$(MAKE) -f Makefile.e2e test-clean
+
+e2e-clean-v2:
+	@$(MAKE) -f Makefile.e2e test-clean-v2
+
+e2e-clean-v3:
+	@$(MAKE) -f Makefile.e2e test-clean-v3
+
+e2e-register-v2:
+	@$(MAKE) -f Makefile.e2e register-v2
+
+e2e-register-v3:
+	@$(MAKE) -f Makefile.e2e register-v3
+
+# =============================================================================
+# Datatype Testing (Makefile.datatype)
+# =============================================================================
+
+.PHONY: datatype-all-v2 datatype-all-v3 datatype-all-dual \
+	datatype-setup datatype-register-v2 datatype-register-v3 datatype-verify datatype-clean
+
+datatype-all-v2:
+	@$(MAKE) -f Makefile.datatype all-v2
+
+datatype-all-v3:
+	@$(MAKE) -f Makefile.datatype all-v3
+
+datatype-all-dual:
+	@$(MAKE) -f Makefile.datatype all-dual
+
+datatype-setup:
+	@$(MAKE) -f Makefile.datatype setup
+
+datatype-register-v2:
+	@$(MAKE) -f Makefile.datatype register-v2
+
+datatype-register-v3:
+	@$(MAKE) -f Makefile.datatype register-v3
+
+datatype-verify:
+	@$(MAKE) -f Makefile.datatype verify
+
+datatype-clean:
+	@$(MAKE) -f Makefile.datatype clean
+
+# =============================================================================
+# IIDR CDC Sink Testing (Makefile.iidr)
+# =============================================================================
+
+.PHONY: iidr-all-v2 iidr-all-v3 iidr-all-dual \
+	iidr-setup iidr-register-v2 iidr-register-v3 iidr-register-pg-v2 iidr-register-pg-v3 \
+	iidr-run iidr-verify iidr-status-v2 iidr-status-v3 iidr-clean
+
+iidr-all-v2:
+	@$(MAKE) -f Makefile.iidr all-v2
+
+iidr-all-v3:
+	@$(MAKE) -f Makefile.iidr all-v3
+
+iidr-all-dual:
+	@$(MAKE) -f Makefile.iidr all-dual
+
+iidr-setup:
+	@$(MAKE) -f Makefile.iidr setup
+
+iidr-register-v2:
+	@$(MAKE) -f Makefile.iidr register-v2
+
+iidr-register-v3:
+	@$(MAKE) -f Makefile.iidr register-v3
+
+iidr-register-pg-v2:
+	@$(MAKE) -f Makefile.iidr register-pg-v2
+
+iidr-register-pg-v3:
+	@$(MAKE) -f Makefile.iidr register-pg-v3
+
+iidr-run:
+	@$(MAKE) -f Makefile.iidr run
+
+iidr-verify:
+	@$(MAKE) -f Makefile.iidr verify
+
+iidr-status-v2:
+	@$(MAKE) -f Makefile.iidr status-v2
+
+iidr-status-v3:
+	@$(MAKE) -f Makefile.iidr status-v3
+
+iidr-clean:
+	@$(MAKE) -f Makefile.iidr clean

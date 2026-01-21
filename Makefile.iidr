@@ -1,0 +1,240 @@
+# Makefile.iidr
+#
+# IIDR CDC Sink Connector testing.
+# Tests the custom IIDR CDC sink connector with MariaDB and PostgreSQL targets.
+# Can be run independently: make -f Makefile.iidr <target>
+#
+# Prerequisites:
+#   - Infrastructure deployed (make -f Makefile.common base-infra-up)
+#   - Kafka Connect images built (make -f Makefile.docker build-v2/v3)
+#
+# ==============================================================================
+
+.DEFAULT_GOAL := help
+
+include Makefile.param
+
+# =============================================================================
+# IIDR-specific Variables
+# =============================================================================
+
+IIDR_TOPIC := iidr.CDC.TEST_ORDERS
+IIDR_CONNECTOR_MARIADB_2X := iidr_cdc_sink_test_2x
+IIDR_CONNECTOR_MARIADB_3X := iidr_cdc_sink_test_3x
+IIDR_CONNECTOR_PG_2X := iidr_cdc_sink_pg_test_2x
+IIDR_CONNECTOR_PG_3X := iidr_cdc_sink_pg_test_3x
+
+# =============================================================================
+# Phony Targets
+# =============================================================================
+
+.PHONY: help all-v2 all-v3 all-dual \
+	setup setup-mariadb setup-postgres \
+	register-v2 register-v3 register-pg-v2 register-pg-v3 \
+	run verify status-v2 status-v3 clean
+
+# =============================================================================
+# Help
+# =============================================================================
+
+help:
+	@echo "Usage: make -f Makefile.iidr [target]"
+	@echo ""
+	@echo "Full Workflows:"
+	@echo "  all-v2               - Full IIDR CDC sink test with Debezium 2.x"
+	@echo "  all-v3               - Full IIDR CDC sink test with Debezium 3.x"
+	@echo "  all-dual             - Full IIDR CDC sink test with both 2.x and 3.x"
+	@echo ""
+	@echo "Setup:"
+	@echo "  setup                - Set up Kafka topic and databases"
+	@echo "  setup-mariadb        - Set up MariaDB target tables"
+	@echo "  setup-postgres       - Set up PostgreSQL target tables"
+	@echo ""
+	@echo "Connector Registration (MariaDB):"
+	@echo "  register-v2          - Register IIDR sink connector on Debezium 2.x"
+	@echo "  register-v3          - Register IIDR sink connector on Debezium 3.x"
+	@echo ""
+	@echo "Connector Registration (PostgreSQL):"
+	@echo "  register-pg-v2       - Register IIDR PostgreSQL sink on Debezium 2.x"
+	@echo "  register-pg-v3       - Register IIDR PostgreSQL sink on Debezium 3.x"
+	@echo ""
+	@echo "Testing:"
+	@echo "  run                  - Produce test IIDR CDC events to Kafka"
+	@echo "  verify               - Verify data in MariaDB and PostgreSQL"
+	@echo "  status-v2            - Check connector status on Debezium 2.x"
+	@echo "  status-v3            - Check connector status on Debezium 3.x"
+	@echo "  clean                - Clean up connectors and tables"
+
+# =============================================================================
+# Full Workflows
+# =============================================================================
+
+all-v2: setup register-v2 register-pg-v2 run verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x completed!"
+
+all-v3: setup register-v3 register-pg-v3 run verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 3.x completed!"
+
+all-dual: setup register-v2 register-v3 register-pg-v2 register-pg-v3 run verify
+	@echo "[OK] Full IIDR CDC sink test with Debezium 2.x and 3.x completed!"
+
+# =============================================================================
+# Setup
+# =============================================================================
+
+setup: setup-mariadb setup-postgres
+	@echo "[INFO] Setting up IIDR CDC sink test environment..."
+	@echo "[INFO] Creating Kafka topic: $(IIDR_TOPIC)..."
+	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
+		--bootstrap-server localhost:9092 \
+		--create --if-not-exists \
+		--topic $(IIDR_TOPIC) \
+		--partitions 1 \
+		--replication-factor 1
+	@echo "[OK] IIDR test setup completed"
+
+setup-mariadb:
+	@echo "[INFO] Setting up MariaDB tables..."
+	kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"CREATE DATABASE IF NOT EXISTS target_database DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+	kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"DROP TABLE IF EXISTS target_database.TEST_ORDERS_v2; DROP TABLE IF EXISTS target_database.TEST_ORDERS_v3; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
+	@echo "[OK] MariaDB setup completed"
+
+setup-postgres:
+	@echo "[INFO] Setting up PostgreSQL tables..."
+	kubectl exec $(POSTGRES_POD) -n $(NAMESPACE) -- env PGPASSWORD=$(POSTGRES_PASS) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
+		"DROP TABLE IF EXISTS test_orders_v2; DROP TABLE IF EXISTS test_orders_v3;"
+	@echo "[OK] PostgreSQL setup completed"
+
+# =============================================================================
+# Connector Registration (MariaDB)
+# =============================================================================
+
+register-v2:
+	@echo "[INFO] Registering IIDR CDC sink connector (MariaDB) on Debezium 2.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test-2x.json $(CURL_POD):/tmp/iidr_cdc_sink-test-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-test-2x.json || echo "[ERROR] Failed to register IIDR sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector (MariaDB) registered on 2.x"
+
+register-v3:
+	@echo "[INFO] Registering IIDR CDC sink connector (MariaDB) on Debezium 3.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-test-3x.json $(CURL_POD):/tmp/iidr_cdc_sink-test-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-test-3x.json || echo "[ERROR] Failed to register IIDR sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector (MariaDB) registered on 3.x"
+
+# =============================================================================
+# Connector Registration (PostgreSQL)
+# =============================================================================
+
+register-pg-v2:
+	@echo "[INFO] Registering IIDR CDC sink connector (PostgreSQL) on Debezium 2.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-pg-test-2x.json $(CURL_POD):/tmp/iidr_cdc_sink-pg-test-2x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-pg-test-2x.json || echo "[ERROR] Failed to register IIDR PostgreSQL sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector (PostgreSQL) registered on 2.x"
+
+register-pg-v3:
+	@echo "[INFO] Registering IIDR CDC sink connector (PostgreSQL) on Debezium 3.x..."
+	kubectl cp hack/sink-jdbc/iidr_cdc_sink-pg-test-3x.json $(CURL_POD):/tmp/iidr_cdc_sink-pg-test-3x.json -n $(NAMESPACE)
+	kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -sf --max-time 10 -X POST \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors \
+		-H "Content-Type: application/json" \
+		-d @/tmp/iidr_cdc_sink-pg-test-3x.json || echo "[ERROR] Failed to register IIDR PostgreSQL sink connector"
+	@echo "[INFO] Waiting 5s for connector to start..."
+	@sleep 5
+	@echo "[OK] IIDR CDC sink connector (PostgreSQL) registered on 3.x"
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+run:
+	@echo "[INFO] Producing IIDR CDC test events..."
+	@echo "[INFO] Creating ConfigMap with producer script..."
+	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
+	kubectl create configmap iidr-producer-script -n $(NAMESPACE) --from-file=producer.py=hack/scripts/iidr-test-producer.py
+	@echo "[INFO] Running producer pod..."
+	kubectl run iidr-test-producer -n $(NAMESPACE) --rm -i --restart=Never \
+		--image=python:3.11-slim \
+		--overrides='{"spec":{"containers":[{"name":"iidr-test-producer","image":"python:3.11-slim","command":["bash","-c","pip install kafka-python -q && python3 /scripts/producer.py --bootstrap-server dbrep-kafka.$(NAMESPACE).svc.cluster.local:9092 --topic $(IIDR_TOPIC)"],"volumeMounts":[{"name":"script","mountPath":"/scripts"}]}],"volumes":[{"name":"script","configMap":{"name":"iidr-producer-script"}}]}}'
+	-kubectl delete configmap iidr-producer-script -n $(NAMESPACE) 2>/dev/null || true
+	@echo "[INFO] Waiting 10s for events to be processed..."
+	@sleep 10
+	@echo "[OK] Test events produced"
+
+verify:
+	@echo "[INFO] Verifying IIDR CDC sink test results..."
+	@echo ""
+	@echo "=== MariaDB Results ==="
+	@echo "[INFO] MariaDB - TEST_ORDERS_v2:"
+	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.TEST_ORDERS_v2 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+	@echo ""
+	@echo "[INFO] MariaDB - TEST_ORDERS_v3:"
+	@kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"SELECT * FROM target_database.TEST_ORDERS_v3 ORDER BY ID;" 2>/dev/null || echo "Table not found or empty"
+	@echo ""
+	@echo "=== PostgreSQL Results ==="
+	@echo "[INFO] PostgreSQL - test_orders_v2:"
+	@kubectl exec $(POSTGRES_POD) -n $(NAMESPACE) -- env PGPASSWORD=$(POSTGRES_PASS) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
+		"SELECT * FROM test_orders_v2 ORDER BY id;" 2>/dev/null || echo "Table not found or empty"
+	@echo ""
+	@echo "[INFO] PostgreSQL - test_orders_v3:"
+	@kubectl exec $(POSTGRES_POD) -n $(NAMESPACE) -- env PGPASSWORD=$(POSTGRES_PASS) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
+		"SELECT * FROM test_orders_v3 ORDER BY id;" 2>/dev/null || echo "Table not found or empty"
+
+# =============================================================================
+# Status
+# =============================================================================
+
+status-v2:
+	@echo "[INFO] Checking IIDR sink connector status on Debezium 2.x..."
+	@echo "MariaDB connector:"
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR_MARIADB_2X)/status | jq .
+	@echo "PostgreSQL connector:"
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR_PG_2X)/status | jq .
+
+status-v3:
+	@echo "[INFO] Checking IIDR sink connector status on Debezium 3.x..."
+	@echo "MariaDB connector:"
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR_MARIADB_3X)/status | jq .
+	@echo "PostgreSQL connector:"
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR_PG_3X)/status | jq .
+
+# =============================================================================
+# Cleanup
+# =============================================================================
+
+clean:
+	@echo "[INFO] Cleaning up IIDR CDC sink test..."
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR_MARIADB_2X)
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR_MARIADB_3X)
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_2X_SVC):8083/connectors/$(IIDR_CONNECTOR_PG_2X)
+	-kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s -X DELETE \
+		http://$(KAFKA_CONNECT_3X_SVC):8083/connectors/$(IIDR_CONNECTOR_PG_3X)
+	-kubectl exec $(MARIADB_POD) -n $(NAMESPACE) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"DROP TABLE IF EXISTS target_database.TEST_ORDERS_v2; DROP TABLE IF EXISTS target_database.TEST_ORDERS_v3; DROP TABLE IF EXISTS target_database.streaming_corrupt_events;"
+	-kubectl exec $(POSTGRES_POD) -n $(NAMESPACE) -- env PGPASSWORD=$(POSTGRES_PASS) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
+		"DROP TABLE IF EXISTS test_orders_v2; DROP TABLE IF EXISTS test_orders_v3;"
+	-kubectl exec $(KAFKA_POD) -n $(NAMESPACE) -- kafka-topics.sh \
+		--bootstrap-server localhost:9092 \
+		--delete --topic $(IIDR_TOPIC) 2>/dev/null || true
+	@echo "[OK] IIDR test cleanup completed"

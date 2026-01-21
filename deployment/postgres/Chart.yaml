@@ -1,0 +1,8 @@
+apiVersion: v2
+name: dbrep-postgres
+description: A wrapper chart for PostgreSQL
+version: 0.1.0
+dependencies:
+  - name: postgresql
+    version: 16.4.1
+    repository: "https://charts.bitnami.com/bitnami"

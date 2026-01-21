@@ -1,0 +1,34 @@
+{
+    "name": "iidr_cdc_sink_pg_test_3x",
+    "config": {
+        "connector.class": "com.example.kafka.connect.iidr.IidrCdcSinkConnector",
+        "tasks.max": "1",
+
+        "topics": "iidr.CDC.TEST_ORDERS",
+
+        "connection.url": "jdbc:postgresql://dbrep-postgres-postgresql.dev.svc.cluster.local:5432/target_database",
+        "connection.user": "postgres",
+        "connection.password": "postgres_password",
+
+        "table.name.format": "TEST_ORDERS_v3",
+
+        "iidr.errors.tolerance": "log",
+
+        "default.timezone": "Asia/Taipei",
+
+        "pk.mode": "record_key",
+        "pk.fields": "ID",
+
+        "auto.create": "true",
+        "auto.evolve": "true",
+
+        "batch.size": "100",
+        "max.retries": "3",
+        "retry.backoff.ms": "1000",
+
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false"
+    }
+}

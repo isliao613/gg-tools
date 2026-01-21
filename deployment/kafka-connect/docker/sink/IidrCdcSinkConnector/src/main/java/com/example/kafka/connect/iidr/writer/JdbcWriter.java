@@ -271,7 +271,8 @@ public class JdbcWriter implements AutoCloseable {
 
     private void ensureTableExists(String tableName, ProcessedRecord sample) throws SQLException {
         DatabaseMetaData meta = connection.getMetaData();
-        try (ResultSet rs = meta.getTables(null, null, tableName, new String[]{"TABLE"})) {
+        String normalizedTableName = dialect.normalizeIdentifierForMetadata(tableName);
+        try (ResultSet rs = meta.getTables(null, null, normalizedTableName, new String[]{"TABLE"})) {
             if (!rs.next()) {
                 log.info("Auto-creating table: " + tableName);
                 createTable(tableName, sample);
@@ -290,8 +291,9 @@ public class JdbcWriter implements AutoCloseable {
 
     private void evolveTable(String tableName, ProcessedRecord sample) throws SQLException {
         DatabaseMetaData meta = connection.getMetaData();
+        String normalizedTableName = dialect.normalizeIdentifierForMetadata(tableName);
         Set<String> existingColumns = new HashSet<>();
-        try (ResultSet rs = meta.getColumns(null, null, tableName, null)) {
+        try (ResultSet rs = meta.getColumns(null, null, normalizedTableName, null)) {
             while (rs.next()) {
                 existingColumns.add(rs.getString("COLUMN_NAME").toUpperCase());
             }

@@ -1,14 +1,40 @@
 # Makefile.docker
-
-# ==============================================================================
-# Docker image specific configuration
-# ==============================================================================
 #
-# Define docker image specific configuration in this file.
+# Docker image build targets for Kafka Connect with Debezium.
+# Can be run independently: make -f Makefile.docker <target>
 #
 # ==============================================================================
 
-# Docker image for Debezium 2.x
+.DEFAULT_GOAL := help
+
+include Makefile.param
+
+# =============================================================================
+# Phony Targets
+# =============================================================================
+
+.PHONY: help build-v2 build-v3 build-all
+
+# =============================================================================
+# Help
+# =============================================================================
+
+help:
+	@echo "Usage: make -f Makefile.docker [target]"
+	@echo ""
+	@echo "Docker Image Build:"
+	@echo "  build-v2             - Build and deploy Kafka Connect with Debezium 2.x"
+	@echo "  build-v3             - Build and deploy Kafka Connect with Debezium 3.x"
+	@echo "  build-all            - Build and deploy both Debezium 2.x and 3.x"
+	@echo ""
+	@echo "Images:"
+	@echo "  Debezium 2.x: $(KAFKA_CONNECT_2X_IMAGE):$(KAFKA_CONNECT_2X_IMAGE_TAG)"
+	@echo "  Debezium 3.x: $(KAFKA_CONNECT_3X_IMAGE):$(KAFKA_CONNECT_3X_IMAGE_TAG)"
+
+# =============================================================================
+# Docker Image Build
+# =============================================================================
+
 build-v2:
 	@echo "[INFO] Building Kafka Connect image with Debezium 2.x..."
 	docker build -t $(KAFKA_CONNECT_2X_IMAGE):$(KAFKA_CONNECT_2X_IMAGE_TAG) \
@@ -28,8 +54,10 @@ build-v2:
 	helm dependency build deployment/kafka-connect-ui
 	helm upgrade --install dbrep-kafka-connect-ui deployment/kafka-connect-ui \
 		-f deployment/kafka-connect-ui/values.yaml -n $(NAMESPACE)
+	@echo "[INFO] Waiting for Kafka Connect 2.x to be ready..."
+	kubectl rollout status deployment/$(KAFKA_CONNECT_2X_SVC) -n $(NAMESPACE) --timeout=300s
+	@echo "[OK] Debezium 2.x deployed and ready"
 
-# Docker image for Debezium 3.x
 build-v3:
 	@echo "[INFO] Building Kafka Connect image with Debezium 3.x..."
 	docker build -t $(KAFKA_CONNECT_3X_IMAGE):$(KAFKA_CONNECT_3X_IMAGE_TAG) \
@@ -45,7 +73,9 @@ build-v3:
 		--set cp-kafka-connect.image=$(KAFKA_CONNECT_3X_IMAGE) \
 		--set cp-kafka-connect.imageTag=$(KAFKA_CONNECT_3X_IMAGE_TAG) \
 		-n $(NAMESPACE)
+	@echo "[INFO] Waiting for Kafka Connect 3.x to be ready..."
+	kubectl rollout status deployment/$(KAFKA_CONNECT_3X_SVC) -n $(NAMESPACE) --timeout=300s
+	@echo "[OK] Debezium 3.x deployed and ready"
 
-# Docker images for both Debezium 2.x and 3.x
 build-all: build-v2 build-v3
-	@echo "[OK] Both Debezium 2.x and 3.x images built"
+	@echo "[OK] Both Debezium 2.x and 3.x images built and deployed"

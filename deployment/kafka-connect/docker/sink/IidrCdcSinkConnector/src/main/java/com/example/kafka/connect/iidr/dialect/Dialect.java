@@ -57,4 +57,13 @@ public interface Dialect {
      * Get the database-specific column type for a given Kafka Connect schema type.
      */
     String getColumnType(org.apache.kafka.connect.data.Schema schema);
+
+    /**
+     * Normalize an identifier (table or column name) for metadata queries.
+     * PostgreSQL stores unquoted identifiers in lowercase, so this method
+     * should return lowercase for PostgreSQL to ensure metadata lookups work correctly.
+     */
+    default String normalizeIdentifierForMetadata(String identifier) {
+        return identifier;
+    }
 }

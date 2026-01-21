@@ -22,6 +22,7 @@
         "transforms.unwrap.drop.tombstones": "false",
         "log.mining.strategy": "online_catalog",
         "lob.enabled": "true",
-        "decimal.handling.mode": "string"
+        "decimal.handling.mode": "string",
+        "legacy.decimal.handling.strategy": "true"
     }
 }

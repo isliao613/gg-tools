@@ -84,4 +84,5 @@ COPY --from=sink-builder /build/target/iidr-cdc-sink-connector-1.0.0.jar /usr/sh
 # Copy JDBC drivers to connector plugin directory
 RUN cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mariadb-java-client-*.jar /usr/share/java/iidr-cdc-sink-connector/ && \
     cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mysql-connector-j-8.0.32/mysql-connector-j-8.0.32.jar /usr/share/java/iidr-cdc-sink-connector/ && \
+    cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/postgresql-*.jar /usr/share/java/iidr-cdc-sink-connector/ && \
     cp /usr/share/confluent-hub-components/confluentinc-kafka-connect-jdbc/lib/mssql-jdbc-*.jar /usr/share/java/iidr-cdc-sink-connector/ 2>/dev/null || true

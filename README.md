@@ -4,20 +4,20 @@ Kubernetes-based CDC toolkit for database replication using Kafka, Debezium, and
 
 ## Features
 
-- **Multi-Database CDC**: Oracle, MariaDB, MSSQL via Debezium
+- **Multi-Database CDC**: Oracle, MariaDB, PostgreSQL, MSSQL via Debezium
 - **Dual Debezium Support**: Run 2.x and 3.x side-by-side for migration testing
 - **IIDR Sink Connector**: Custom connector for IBM InfoSphere Data Replication events
 - **Kafka 4.0**: KRaft mode (no ZooKeeper)
 - **Web UIs**: Redpanda Console and Kafka Connect UI
-- **Kubernetes-Native**: Helm charts for all components
+- **Modular Makefiles**: Independent test suites that can run separately
 
 ## Architecture
 
 ```
 ┌─────────────┐     ┌─────────────────────────────────┐     ┌─────────────┐
 │   Source    │     │          Kafka Cluster          │     │   Target    │
-│  (Oracle/   │────▶│  ┌─────────────────────────┐    │────▶│  (MariaDB/  │
-│   MSSQL)    │     │  │ Kafka Connect 2.x / 3.x │    │     │   MySQL)    │
+│  (Oracle/   │────▶│  ┌─────────────────────────┐    │────▶│ (MariaDB/   │
+│   MSSQL)    │     │  │ Kafka Connect 2.x / 3.x │    │     │ PostgreSQL) │
 └─────────────┘     │  └─────────────────────────┘    │     └─────────────┘
                     └─────────────────────────────────┘
 ```
@@ -25,68 +25,87 @@ Kubernetes-based CDC toolkit for database replication using Kafka, Debezium, and
 ## Quick Start
 
 ```bash
-# Install tools (kubectl, helm, kind)
+# 1. Install tools (kubectl, helm, kind)
 make .tools
 
-# Full E2E pipeline with both Debezium 2.x and 3.x
-make all-dual
+# 2. Create infrastructure (Kind cluster, Kafka, Oracle, MariaDB, PostgreSQL)
+make base-infra-up
 
-# Or single version
-make all-v2   # Debezium 2.x only
-make all-v3   # Debezium 3.x only
+# 3. Build Kafka Connect images with Debezium
+make build-all
 
-# Verify replication
-make test-verify
+# 4. Run tests (choose one)
+make e2e-all-dual       # E2E: Oracle → MariaDB
+make datatype-all-dual  # Datatype comparison
+make iidr-all-dual      # IIDR sink: Kafka → MariaDB/PostgreSQL
 
-# Cleanup
+# 5. Cleanup
 make clean
 ```
 
+> **Note**: Steps 1-3 are prerequisites. All test targets (`e2e-*`, `datatype-*`, `iidr-*`) require infrastructure and images to be ready first.
+
+## Modular Makefiles
+
+Each test suite has its own independent Makefile:
+
+| Makefile | Purpose | Example |
+|----------|---------|---------|
+| `Makefile.common` | Infrastructure & utilities | `make -f Makefile.common base-infra-up` |
+| `Makefile.docker` | Docker image builds | `make -f Makefile.docker build-v3` |
+| `Makefile.e2e` | E2E Oracle→MariaDB testing | `make -f Makefile.e2e all-dual` |
+| `Makefile.datatype` | Data type comparison | `make -f Makefile.datatype all-dual` |
+| `Makefile.iidr` | IIDR CDC sink testing | `make -f Makefile.iidr all-dual` |
+
+Run `make -f <Makefile> help` to see available targets for each module.
+
 ## Make Targets
-
-### Main Workflows
-
-| Target | Description |
-|--------|-------------|
-| `all-v2` | Full E2E with Debezium 2.x |
-| `all-v3` | Full E2E with Debezium 3.x |
-| `all-dual` | Full E2E with both versions |
-| `clean` | Delete cluster and services |
 
 ### Infrastructure
 
 | Target | Description |
 |--------|-------------|
+| `base-infra-up` | Create Kind cluster, deploy Kafka/Oracle/MariaDB/PostgreSQL |
+| `clean` | Delete cluster and all services |
 | `.tools` | Install kubectl, helm, kind |
-| `base-infra-up` | Create cluster, deploy Kafka/Oracle/MariaDB |
 | `build-v2` / `build-v3` | Build Kafka Connect images |
+| `build-all` | Build both Debezium 2.x and 3.x images |
 | `port-forward` | Forward all service ports |
 
-### Testing
+### E2E Testing (Oracle → MariaDB)
 
 | Target | Description |
 |--------|-------------|
-| `test-setup` | Set up databases |
-| `test-run` | Run CDC tests (INSERT/UPDATE/DELETE) |
-| `test-verify` | Verify target tables |
-| `test-clean` | Clean up connectors and tables |
-| `register-v2` / `register-v3` | Register connectors |
-| `verify-v2` / `verify-v3` | Verify specific version |
+| `e2e-all-v2` / `e2e-all-v3` | Full E2E pipeline |
+| `e2e-all-dual` | Full E2E with both versions |
+| `e2e-setup` | Set up databases |
+| `e2e-run` | Run CDC tests (INSERT/UPDATE/DELETE) |
+| `e2e-verify` | Verify target tables |
+| `e2e-clean` | Clean up connectors and tables |
+| `e2e-register-v2` / `e2e-register-v3` | Register connectors |
 
 ### Data Type Testing
 
 | Target | Description |
 |--------|-------------|
+| `datatype-all-v2` / `datatype-all-v3` | Full datatype test |
 | `datatype-all-dual` | Compare 2.x vs 3.x data type handling |
+| `datatype-setup` | Set up Oracle and MariaDB |
 | `datatype-verify` | Show data from both versions |
+| `datatype-clean` | Clean up |
 
-### IIDR Sink Connector
+### IIDR Sink Connector (MariaDB & PostgreSQL)
 
 | Target | Description |
 |--------|-------------|
 | `iidr-all-v2` / `iidr-all-v3` | Full IIDR sink test |
+| `iidr-all-dual` | Test with both versions |
+| `iidr-setup` | Set up Kafka topic and databases |
+| `iidr-register-v2` / `iidr-register-v3` | Register MariaDB sink |
+| `iidr-register-pg-v2` / `iidr-register-pg-v3` | Register PostgreSQL sink |
 | `iidr-run` | Produce test IIDR events |
-| `iidr-verify` | Verify IIDR sink results |
+| `iidr-verify` | Verify MariaDB and PostgreSQL results |
+| `iidr-clean` | Clean up |
 
 ### Utilities
 
@@ -94,6 +113,9 @@ make clean
 |--------|-------------|
 | `logs-v2` / `logs-v3` | View Kafka Connect logs |
 | `status-v2` / `status-v3` | Check connector status |
+| `setup-oracle` | Set up Oracle for CDC |
+| `setup-mariadb` | Set up MariaDB target |
+| `setup-postgres` | Set up PostgreSQL target |
 
 ## Web UIs
 
@@ -105,22 +127,33 @@ make port-forward
 |----|-----|-------------|
 | Redpanda Console | http://localhost:8080 | Topics, messages, consumer groups |
 | Kafka Connect UI | http://localhost:8000 | Connector management |
+| Kafka Connect 2.x | http://localhost:8083 | REST API |
+| Kafka Connect 3.x | http://localhost:8084 | REST API |
 
 ## Project Structure
 
 ```
 kafka-dbsync/
-├── Makefile*            # Automation targets
+├── Makefile             # Main aggregator
+├── Makefile.param       # Shared parameters
+├── Makefile.common      # Infrastructure & utilities
+├── Makefile.docker      # Docker image builds
+├── Makefile.e2e         # E2E testing
+├── Makefile.datatype    # Datatype testing
+├── Makefile.iidr        # IIDR sink testing
 ├── deployment/          # Helm wrapper charts
-│   ├── kafka/          # Kafka (Bitnami)
-│   ├── kafka-connect/  # Confluent Kafka Connect + Debezium
-│   ├── oracle/         # Oracle XE 21c
-│   └── mariadb/        # MariaDB
-├── hack/               # Test configs and scripts
-│   ├── source-debezium/  # Debezium connector configs
-│   ├── sink-jdbc/        # JDBC sink configs
-│   └── sql/              # Database setup scripts
-└── helm-chart/         # Source Helm charts
+│   ├── kafka/           # Kafka (Bitnami)
+│   ├── kafka-connect/   # Confluent Kafka Connect + Debezium
+│   │   └── docker/      # Custom connector source code
+│   ├── oracle/          # Oracle XE 21c
+│   ├── mariadb/         # MariaDB
+│   └── postgres/        # PostgreSQL
+├── hack/                # Test configs and scripts
+│   ├── source-debezium/ # Debezium connector configs
+│   ├── sink-jdbc/       # JDBC sink configs
+│   ├── scripts/         # Test producer scripts
+│   └── sql/             # Database setup scripts
+└── docs/                # Documentation
 ```
 
 ## Dual Debezium Mode
@@ -144,6 +177,8 @@ Custom sink connector for IBM IIDR CDC events with A_ENTTYP header mapping:
 | UP, FI, FP | UPSERT |
 | DL, DR | DELETE |
 
+Supports both MariaDB and PostgreSQL targets with auto-create and auto-evolve.
+
 See [IIDR Connector README](deployment/kafka-connect/docker/sink/IidrCdcSinkConnector/README.md) for details.
 
 ## Troubleshooting
@@ -161,20 +196,21 @@ make status-v2
 make status-v3
 
 # Reset everything
-make clean && make all-dual
+make clean && make base-infra-up && make build-all
 ```
 
 | Issue | Solution |
 |-------|----------|
 | Pods not starting | Increase Docker memory (8GB+ recommended) |
 | Connector FAILED | Check logs, verify database connectivity |
-| No data replicating | Check connector status |
+| No data replicating | Check connector status, verify topic exists |
+| PostgreSQL type errors | Ensure latest connector image is deployed |
 
 ## Documentation
 
 - [E2E Test Guide](hack/E2E_TEST_ORACLE_CDC.md)
 - [IIDR Sink Connector](deployment/kafka-connect/docker/sink/IidrCdcSinkConnector/README.md)
-- [Connector Configs](hack/)
+- [Debezium 2.x vs 3.x Comparison](docs/debezium-2x-vs-3x-comparison.md)
 
 ## References
 

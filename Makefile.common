@@ -1,0 +1,217 @@
+# Makefile.common
+#
+# Common infrastructure and utility targets.
+# Can be run independently: make -f Makefile.common <target>
+#
+# ==============================================================================
+
+.DEFAULT_GOAL := help
+
+include Makefile.param
+
+# =============================================================================
+# Phony Targets
+# =============================================================================
+
+.PHONY: help base-infra-up clean .check-tools .tools \
+	setup-oracle setup-mariadb setup-postgres \
+	logs-v2 logs-v3 status-v2 status-v3 port-forward
+
+# =============================================================================
+# Help
+# =============================================================================
+
+help:
+	@echo "Usage: make -f Makefile.common [target]"
+	@echo ""
+	@echo "Infrastructure Management:"
+	@echo "  base-infra-up        - Create Kind cluster and deploy base services"
+	@echo "  clean                - Delete Kind cluster and all services"
+	@echo "  .check-tools         - Check if required tools are installed"
+	@echo "  .tools               - Install required tools (kubectl, helm, kind)"
+	@echo ""
+	@echo "Database Setup:"
+	@echo "  setup-oracle         - Set up Oracle XE 21c for CDC"
+	@echo "  setup-mariadb        - Set up MariaDB target database"
+	@echo "  setup-postgres       - Set up PostgreSQL target database"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  logs-v2              - View logs of Debezium 2.x Kafka Connect"
+	@echo "  logs-v3              - View logs of Debezium 3.x Kafka Connect"
+	@echo "  status-v2            - Check connector status on Debezium 2.x"
+	@echo "  status-v3            - Check connector status on Debezium 3.x"
+	@echo "  port-forward         - Set up port forwarding"
+	@echo ""
+	@echo "Dual Kafka Connect Services:"
+	@echo "  Debezium 2.x: $(KAFKA_CONNECT_2X_SVC):8083"
+	@echo "  Debezium 3.x: $(KAFKA_CONNECT_3X_SVC):8083"
+
+# =============================================================================
+# Infrastructure Management
+# =============================================================================
+
+base-infra-up: .check-tools
+	@echo "Creating Kind cluster and deploying services (dual Kafka Connect)..."
+	@if kind get clusters 2>/dev/null | grep -q "^$(CLUSTER_NAME)$$"; then \
+		echo "Cluster '$(CLUSTER_NAME)' already exists"; \
+	else \
+		kind create cluster --name $(CLUSTER_NAME) --config hack/kind-config.yaml; \
+	fi
+	@kubectl cluster-info --context kind-$(CLUSTER_NAME)
+	@echo "[OK] Cluster created"
+	@echo "[INFO] Creating namespace '$(NAMESPACE)'..."
+	-kubectl create ns $(NAMESPACE)
+	kubectl config set-context --current --namespace $(NAMESPACE)
+	@echo "[INFO] Deploying services..."
+	docker pull public.ecr.aws/bitnami/kafka:3.9.0-debian-12-r4
+	kind load docker-image public.ecr.aws/bitnami/kafka:3.9.0-debian-12-r4 --name $(CLUSTER_NAME)
+	helm repo add bitnami https://charts.bitnami.com/bitnami
+	helm dependency build deployment/kafka
+	helm upgrade --install dbrep-kafka deployment/kafka -f deployment/kafka/values-kraft.yaml -n $(NAMESPACE)
+	helm dependency build deployment/redpanda-console
+	helm upgrade --install dbrep-redpanda-console deployment/redpanda-console -f deployment/redpanda-console/values.yaml -n $(NAMESPACE)
+	helm dependency build deployment/mariadb
+	helm upgrade --install dbrep-mariadb deployment/mariadb -f deployment/mariadb/values.yaml -n $(NAMESPACE)
+	helm dependency build deployment/postgres
+	helm upgrade --install dbrep-postgres deployment/postgres -f deployment/postgres/values.yaml -n $(NAMESPACE)
+	-kubectl delete -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) 2>/dev/null || true
+	kubectl apply -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE)
+	helm dependency build deployment/mssql
+	helm upgrade --install dbrep-mssql deployment/mssql -f deployment/mssql/values.yaml -n $(NAMESPACE)
+	@echo "[INFO] Deploying Oracle XE 21c..."
+	kubectl apply -f deployment/oracle/oracle-free.yaml -n $(NAMESPACE)
+	helm dependency build deployment/curl-client
+	helm upgrade --install dbrep-curl-client deployment/curl-client -f deployment/curl-client/values.yaml -n $(NAMESPACE)
+	@echo "[OK] All services deployed (Debezium 2.x + 3.x)"
+	@echo "[INFO] Waiting for pods to be ready..."
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=kafka --timeout=300s -n $(NAMESPACE)
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=mariadb --timeout=300s -n $(NAMESPACE)
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=postgresql --timeout=300s -n $(NAMESPACE)
+	kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=curl-client --timeout=120s -n $(NAMESPACE)
+	kubectl wait --for=condition=ready pod -l app=oracle-db --timeout=300s -n $(NAMESPACE)
+	@echo "[OK] All pods ready"
+
+clean:
+	@echo "Deleting Kind cluster and services..."
+	-kind delete cluster --name $(CLUSTER_NAME)
+	@echo "[INFO] Waiting 10s for cluster to be deleted..."
+	sleep 10
+	-kubectl delete -f deployment/oracle/oracle-free.yaml -n $(NAMESPACE) || true
+	-helm uninstall dbrep-mssql -n $(NAMESPACE) || true
+	-kubectl delete -f helm-chart/minio/minio-dev.yaml -n $(NAMESPACE) || true
+	-helm uninstall dbrep-mariadb -n $(NAMESPACE) || true
+	-helm uninstall dbrep-postgres -n $(NAMESPACE) || true
+	-helm uninstall dbrep-redpanda-console -n $(NAMESPACE) || true
+	-helm uninstall dbrep-kafka-connect-ui -n $(NAMESPACE) || true
+	-helm uninstall dbrep-kafka-connect -n $(NAMESPACE) || true
+	-helm uninstall dbrep-kafka-connect-v3 -n $(NAMESPACE) || true
+	-helm uninstall dbrep-kafka -n $(NAMESPACE) || true
+	-helm uninstall dbrep-curl-client -n $(NAMESPACE) || true
+	-kubectl delete pvc --all -n $(NAMESPACE) || true
+	@echo "[OK] All services and PVCs deleted"
+
+.check-tools:
+	@command -v kubectl >/dev/null 2>&1 || { echo "[ERROR] kubectl not found. Run 'make -f Makefile.common .tools' first."; exit 1; }
+	@command -v helm >/dev/null 2>&1 || { echo "[ERROR] helm not found. Run 'make -f Makefile.common .tools' first."; exit 1; }
+	@command -v kind >/dev/null 2>&1 || { echo "[ERROR] kind not found. Run 'make -f Makefile.common .tools' first."; exit 1; }
+
+.tools:
+	@echo "[INFO] Installing kubectl..."
+	@if ! command -v kubectl >/dev/null 2>&1; then \
+		curl -sLO "https://dl.k8s.io/release/v1.28.0/bin/linux/amd64/kubectl" && \
+		chmod +x kubectl && \
+		sudo mv kubectl /usr/local/bin/; \
+	else \
+		echo "kubectl already installed"; \
+	fi
+	@echo "[INFO] Installing helm..."
+	@if ! command -v helm >/dev/null 2>&1; then \
+		curl -sLo helm.tar.gz "https://get.helm.sh/helm-v3.13.0-linux-amd64.tar.gz" && \
+		tar -zxf helm.tar.gz linux-amd64/helm --strip-components 1 && \
+		sudo mv helm /usr/local/bin/ && \
+		rm helm.tar.gz; \
+	else \
+		echo "helm already installed"; \
+	fi
+	@echo "[INFO] Installing kind..."
+	@if ! command -v kind >/dev/null 2>&1; then \
+		curl -sLo kind "https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64" && \
+		chmod +x kind && \
+		sudo mv kind /usr/local/bin/; \
+	else \
+		echo "kind already installed"; \
+	fi
+	@echo "[OK] Tools installed"
+
+# =============================================================================
+# Database Setup
+# =============================================================================
+
+setup-oracle:
+	@echo "[INFO] Setting up Oracle XE 21c..."
+	@echo "[INFO] Step 1: Enabling ARCHIVELOG mode..."
+	kubectl cp hack/sql/oracle-xe-archivelog.sql $(ORACLE_POD):/tmp/archivelog.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S / as sysdba @/tmp/archivelog.sql
+	@echo "[INFO] Waiting for PDB to be fully open..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		OPEN_MODE=$$(kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- bash -c "echo 'SELECT open_mode FROM v\$$pdbs WHERE name='\''XEPDB1'\'';' | sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba" 2>/dev/null | grep -o 'READ WRITE' || true); \
+		if [ "$$OPEN_MODE" = "READ WRITE" ]; then echo "[INFO] PDB is open"; break; fi; \
+		echo "[INFO] Waiting for PDB... ($$i/10)"; sleep 3; \
+	done
+	@echo "[INFO] Step 2: Creating CDC user in CDB..."
+	kubectl cp hack/sql/oracle-xe-cdc-user.sql $(ORACLE_POD):/tmp/cdc-user.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba @/tmp/cdc-user.sql
+	@echo "[INFO] Step 3: Propagating CDC user to PDB..."
+	kubectl cp hack/sql/oracle-xe-pdb-user.sql $(ORACLE_POD):/tmp/pdb-user.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_SID) as sysdba @/tmp/pdb-user.sql
+	@echo "[INFO] Step 4: Creating DEMO schema and source table..."
+	kubectl cp hack/sql/oracle-xe-demo-schema.sql $(ORACLE_POD):/tmp/demo-schema.sql -n $(NAMESPACE)
+	kubectl exec $(ORACLE_POD) -n $(NAMESPACE) -- sqlplus -S sys/oracle@localhost:1521/$(ORACLE_PDB) as sysdba @/tmp/demo-schema.sql
+	@echo "[OK] Oracle setup completed"
+
+setup-mariadb:
+	@echo "[INFO] Setting up MariaDB..."
+	kubectl exec $(MARIADB_POD) -- mysql -h $(MARIADB_HOST) -u$(MARIADB_USER) -p$(MARIADB_PASS) -e \
+		"CREATE DATABASE IF NOT EXISTS target_database DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; DROP TABLE IF EXISTS target_database.target_orders_v2; DROP TABLE IF EXISTS target_database.target_orders_v3;"
+	@echo "[OK] MariaDB setup completed"
+
+setup-postgres:
+	@echo "[INFO] Setting up PostgreSQL..."
+	kubectl exec $(POSTGRES_POD) -n $(NAMESPACE) -- env PGPASSWORD=$(POSTGRES_PASS) psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -c \
+		"DROP TABLE IF EXISTS target_orders_v2; DROP TABLE IF EXISTS target_orders_v3;"
+	@echo "[OK] PostgreSQL setup completed"
+
+# =============================================================================
+# Utilities
+# =============================================================================
+
+logs-v2:
+	@echo "Viewing Kafka Connect logs (Debezium 2.x)..."
+	kubectl logs -f deployment/$(KAFKA_CONNECT_2X_SVC) --tail=100 -n $(NAMESPACE)
+
+logs-v3:
+	@echo "Viewing Kafka Connect logs (Debezium 3.x)..."
+	kubectl logs -f deployment/$(KAFKA_CONNECT_3X_SVC) --tail=100 -n $(NAMESPACE)
+
+status-v2:
+	@echo "[INFO] Checking connector status on Debezium 2.x..."
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_2X_SVC):8083/connectors | jq .
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s "http://$(KAFKA_CONNECT_2X_SVC):8083/connectors?expand=status" | jq .
+
+status-v3:
+	@echo "[INFO] Checking connector status on Debezium 3.x..."
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s http://$(KAFKA_CONNECT_3X_SVC):8083/connectors | jq .
+	@kubectl exec $(CURL_POD) -n $(NAMESPACE) -- curl -s "http://$(KAFKA_CONNECT_3X_SVC):8083/connectors?expand=status" | jq .
+
+port-forward:
+	@echo "Setting up port forwarding..."
+	@echo "Kafka Connect UI: http://localhost:8000"
+	@echo "Redpanda Console: http://localhost:8080"
+	@echo "Kafka Connect 2.x API: http://localhost:8083"
+	@echo "Kafka Connect 3.x API: http://localhost:8084"
+	kubectl port-forward svc/dbrep-kafka-connect-ui 8000:80 -n $(NAMESPACE) &
+	kubectl port-forward svc/dbrep-redpanda-console 8080:8080 -n $(NAMESPACE) &
+	kubectl port-forward svc/$(KAFKA_CONNECT_2X_SVC) 8083:8083 -n $(NAMESPACE) &
+	kubectl port-forward svc/$(KAFKA_CONNECT_3X_SVC) 8084:8083 -n $(NAMESPACE) &
+	@echo "[INFO] Port forwarding started in background. Press Ctrl+C to stop all."
+	wait
