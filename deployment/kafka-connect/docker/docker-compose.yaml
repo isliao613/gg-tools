@@ -20,6 +20,8 @@ services:
         condition: service_completed_successfully
     environment:
       - ORACLE_PASSWORD=OraclePwd123
+      # Note: Oracle Free uses AL32UTF8 and doesn't support changing charset.
+      # Test data uses UNISTR() to simulate halfwidth-garbled Big-5 from US7ASCII databases.
     ports:
       - "1521:1521"
     volumes:
