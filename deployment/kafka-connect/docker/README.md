@@ -152,22 +152,25 @@ Expected output:
 Insert a new record to test real-time CDC:
 
 ```bash
-docker compose exec oracle bash -c "sqlplus -S testuser/testpwd@//localhost:1521/FREEPDB1 << 'EOF'
-INSERT INTO customers (id, name, address, description) VALUES (
+docker compose exec oracle bash -c "sqlplus -S c##dbzuser/dbz@//localhost:1521/XEPDB1 << 'EOF'
+INSERT INTO big5_test (id, name, address, description) VALUES (
     4,
-    UNISTR('\FFB4\FFFA\FFB8\FFD5'),
-    UNISTR('\FFA5\0078\FFA5\005F\FFA5\FFAB'),
+    CONVERT('新增', 'ZHT16MSWIN950', 'AL32UTF8'),
+    CONVERT('測試', 'ZHT16MSWIN950', 'AL32UTF8'),
     'CDC test record'
 );
 COMMIT;
 EOF"
 ```
 
-Wait a few seconds, then verify in MariaDB:
+Wait a few seconds, then verify in Kafka:
 
 ```bash
-docker compose exec mariadb mariadb -u testuser -ptestpwd testdb \
-  -e "SELECT * FROM customers WHERE ID='4';"
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic oracle.C__DBZUSER.BIG5_TEST \
+  --from-beginning \
+  --timeout-ms 10000 2>/dev/null | grep '"ID":"4"' | jq '.payload.after'
 ```
 
 ## Cleanup
