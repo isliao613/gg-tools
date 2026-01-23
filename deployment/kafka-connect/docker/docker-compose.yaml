@@ -1,0 +1,147 @@
+services:
+  # Init container to fix Oracle volume permissions
+  init:
+    image: busybox:1.36
+    command:
+      - "sh"
+      - "-c"
+      - |
+        set -xe
+        chown -R 54321:54321 /opt/oracle/oradata
+    volumes:
+      - ./oradata:/opt/oracle/oradata
+    restart: "no"
+
+  # Oracle Express database for charset testing
+  # IMPORTANT: Mount host folder (./oradata) instead of Docker volume to trigger fresh DB creation
+  # which respects ORACLE_CHARACTERSET env var
+  oracle:
+    # retag of container-registry.oracle.com/database/express:21.3.0-xe
+    image: rophy/oracle-database:21.3.0-xe
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      - ORACLE_PWD=OraclePwd123
+      - ORACLE_CHARACTERSET=US7ASCII
+      - ENABLE_ARCHIVELOG=true
+    ports:
+      - "1521:1521"
+    volumes:
+      - ./oradata:/opt/oracle/oradata
+      - ./scripts:/opt/oracle/scripts/startup:ro
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'SELECT 1 FROM DUAL;' | sqlplus -S system/OraclePwd123@//localhost:1521/XEPDB1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    networks:
+      - cdc-network
+
+  # Kafka with KRaft (no Zookeeper)
+  kafka:
+    image: apache/kafka:3.9.0
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cdc-network
+
+  # Kafka Connect with Debezium
+  kafka-connect:
+    build:
+      context: .
+      dockerfile: Dockerfile.debezium-v3
+    depends_on:
+      kafka:
+        condition: service_healthy
+      oracle:
+        condition: service_healthy
+    environment:
+      - CONNECT_BOOTSTRAP_SERVERS=kafka:9092
+      - CONNECT_REST_PORT=8083
+      - CONNECT_GROUP_ID=kafka-connect-group
+      - CONNECT_CONFIG_STORAGE_TOPIC=_connect-configs
+      - CONNECT_OFFSET_STORAGE_TOPIC=_connect-offsets
+      - CONNECT_STATUS_STORAGE_TOPIC=_connect-status
+      - CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_STATUS_STORAGE_REPLICATION_FACTOR=1
+      - CONNECT_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
+      - CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE=false
+      - CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false
+      - CONNECT_REST_ADVERTISED_HOST_NAME=kafka-connect
+      - CONNECT_PLUGIN_PATH=/usr/share/java,/usr/share/confluent-hub-components
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./connectors:/connectors:ro
+    networks:
+      - cdc-network
+
+  # Kafka consumer for viewing messages
+  kafka-consumer:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["tail", "-f", "/dev/null"]
+    networks:
+      - cdc-network
+
+  # MariaDB for sink testing
+  mariadb:
+    image: mariadb:11.4
+    environment:
+      - MARIADB_ROOT_PASSWORD=rootpwd
+      - MARIADB_DATABASE=testdb
+      - MARIADB_USER=testuser
+      - MARIADB_PASSWORD=testpwd
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./scripts/mariadb-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - cdc-network
+
+volumes:
+  oracle-oradata:
+  kafka-data:
+  mariadb-data:
+
+networks:
+  cdc-network:
+    driver: bridge

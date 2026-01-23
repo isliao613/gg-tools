@@ -1,0 +1,31 @@
+{
+  "name": "oracle-source-smt",
+  "config": {
+    "connector.class": "io.debezium.connector.oracle.OracleConnector",
+    "tasks.max": "1",
+    "database.hostname": "oracle",
+    "database.port": "1521",
+    "database.user": "c##dbzuser",
+    "database.password": "dbz",
+    "database.dbname": "XE",
+    "database.pdb.name": "XEPDB1",
+    "topic.prefix": "oracle",
+    "schema.include.list": "C##DBZUSER",
+    "table.include.list": "C##DBZUSER.BIG5_TEST",
+    "database.history.kafka.bootstrap.servers": "kafka:9092",
+    "database.history.kafka.topic": "schema-changes.oracle",
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "schema.history.internal.kafka.topic": "schema-changes.oracle",
+    "log.mining.strategy": "online_catalog",
+    "decimal.handling.mode": "string",
+    "snapshot.mode": "always",
+    "transforms": "legacycharset",
+    "transforms.legacycharset.type": "com.example.debezium.smt.LegacyCharsetTransform",
+    "transforms.legacycharset.encoding": "BIG5",
+    "transforms.legacycharset.columns": "NAME,ADDRESS,DESCRIPTION",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "true",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true"
+  }
+}

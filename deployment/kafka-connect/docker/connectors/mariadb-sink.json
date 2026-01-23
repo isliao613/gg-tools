@@ -1,0 +1,24 @@
+{
+  "name": "mariadb-sink",
+  "config": {
+    "connector.class": "io.confluent.connect.jdbc.JdbcSinkConnector",
+    "tasks.max": "1",
+    "topics": "oracle.C__DBZUSER.BIG5_TEST",
+    "connection.url": "jdbc:mariadb://mariadb:3306/testdb",
+    "connection.user": "testuser",
+    "connection.password": "testpwd",
+    "insert.mode": "upsert",
+    "pk.mode": "record_value",
+    "pk.fields": "ID",
+    "table.name.format": "customers",
+    "auto.create": "false",
+    "auto.evolve": "false",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "true",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "true",
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "true"
+  }
+}
