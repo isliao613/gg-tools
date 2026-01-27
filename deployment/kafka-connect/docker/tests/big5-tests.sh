@@ -298,6 +298,7 @@ EOF
 cleanup_connectors() {
     log_info "Cleaning up connectors..."
     delete_connector "oracle-source-smt"
+    delete_connector "oracle-source-smt-all-columns"
     delete_connector "oracle-source"
 }
 
@@ -366,11 +367,43 @@ test_smt_transforms_big5() {
     assert_not_contains "$messages" "ﾴ￺" "No halfwidth characters in output"
 }
 
+test_smt_all_columns() {
+    log_info "=== Test: SMT without columns config transforms all columns ==="
+
+    # Clean up any existing connector and topic
+    delete_connector "oracle-source-smt"
+    delete_connector "oracle-source-smt-all-columns"
+    delete_connector "oracle-source"
+    cleanup_topics
+
+    # Deploy connector with SMT but without columns specified
+    deploy_connector "connectors/oracle-source-with-smt-all-columns.json"
+
+    # Wait for data to be captured
+    log_info "Waiting for CDC to capture data..."
+    sleep 10
+
+    # Consume messages (we inserted 6 records)
+    local messages
+    messages=$(consume_messages "oracle.C__DBZUSER.BIG5_TEST" 6)
+
+    # Test assertions - all string columns should be decoded
+    assert_contains "$messages" "測試" "All-columns SMT decodes 測試 correctly"
+    assert_contains "$messages" "台北市" "All-columns SMT decodes 台北市 correctly"
+    assert_contains "$messages" "中文" "All-columns SMT decodes 中文 correctly"
+    assert_contains "$messages" "你好" "All-columns SMT decodes 你好 correctly"
+    assert_contains "$messages" "世界" "All-columns SMT decodes 世界 correctly"
+
+    # Should NOT contain halfwidth characters (raw/garbled)
+    assert_not_contains "$messages" "ﾴ￺" "All-columns SMT: No halfwidth characters in output"
+}
+
 test_without_smt_shows_halfwidth() {
     log_info "=== Test: Without SMT shows halfwidth characters ==="
 
     # Clean up previous connector and topic
     delete_connector "oracle-source-smt"
+    delete_connector "oracle-source-smt-all-columns"
     delete_connector "oracle-source"
     cleanup_topics
 
@@ -433,6 +466,10 @@ run_all_tests() {
 
     echo ""
 
+    test_smt_all_columns
+
+    echo ""
+
     test_without_smt_shows_halfwidth
 
     echo ""
@@ -461,18 +498,24 @@ case "${1:-all}" in
         test_without_smt_shows_halfwidth
         print_summary
         ;;
+    test-smt-all-columns)
+        wait_for_connect
+        test_smt_all_columns
+        print_summary
+        ;;
     all)
         run_all_tests
         ;;
     *)
-        echo "Usage: $0 [setup|cleanup|test-smt|test-no-smt|all]"
+        echo "Usage: $0 [setup|cleanup|test-smt|test-smt-all-columns|test-no-smt|all]"
         echo ""
         echo "Commands:"
-        echo "  setup       - Create table and insert test data"
-        echo "  cleanup     - Remove connectors, topics, and table"
-        echo "  test-smt    - Test SMT transformation only"
-        echo "  test-no-smt - Test without SMT only"
-        echo "  all         - Run complete test suite (default)"
+        echo "  setup                - Create table and insert test data"
+        echo "  cleanup              - Remove connectors, topics, and table"
+        echo "  test-smt             - Test SMT transformation with columns specified"
+        echo "  test-smt-all-columns - Test SMT transformation without columns (all columns)"
+        echo "  test-no-smt          - Test without SMT only"
+        echo "  all                  - Run complete test suite (default)"
         exit 1
         ;;
 esac

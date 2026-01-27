@@ -185,7 +185,8 @@ public class LegacyCharsetTransform<R extends ConnectRecord<R>> implements Trans
         for (Field field : struct.schema().fields()) {
             Object fieldValue = struct.get(field);
 
-            if (columns.contains(field.name()) && fieldValue instanceof String) {
+            // If columns is empty, transform all string columns; otherwise only specified columns
+            if (fieldValue instanceof String && (columns.isEmpty() || columns.contains(field.name()))) {
                 String decoded = decodeToUnicode((String) fieldValue);
                 newStruct.put(field, decoded);
                 if (!decoded.equals(fieldValue)) {
